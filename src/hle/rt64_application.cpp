@@ -70,7 +70,7 @@ namespace RT64 {
             RT64_LOG_OPEN(userPaths.logPath.c_str());
         }
 
-#   ifdef _WIN64
+#   ifdef _WIN32
         wineDetected = Sommelier::detectWine();
 
         // Change the default graphics API when running under Wine to avoid using the D3D12 translation layer when possible. Recreate the default user configuration right afterwards so this new value is assigned.
@@ -83,7 +83,7 @@ namespace RT64 {
     }
     
     Application::SetupResult Application::setup(uint32_t threadId) {
-#   ifdef _WIN64
+#   ifdef _WIN32
         if (!DynamicLibraries::load()) {
             fprintf(stderr, "Failed to load dynamic libraries. Make sure the dependencies are next to the Plugin's DLL.\n");
             return SetupResult::Success;
@@ -115,7 +115,7 @@ namespace RT64 {
         // Create a render interface with the preferred backend.
         switch (userConfig.graphicsAPI) {
         case UserConfiguration::GraphicsAPI::D3D12:
-#       ifdef _WIN64
+#       ifdef _WIN32
             renderInterface = CreateD3D12Interface();
             break;
 #       else

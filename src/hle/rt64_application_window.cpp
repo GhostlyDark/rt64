@@ -57,7 +57,7 @@ namespace RT64 {
         if (listener->usesWindowMessageFilter()) {
             assert(HookedApplicationWindow == nullptr);
             assert(threadId != 0);
-            windowHook = SetWindowsHookEx(WH_GETMESSAGE, &windowHookCallback, NULL, threadId);
+            windowHook = SetWindowsHookEx(WH_GETMESSAGE, (HOOKPROC) & windowHookCallback, NULL, threadId);
             HookedApplicationWindow = this;
         }
 #   endif
@@ -270,7 +270,7 @@ namespace RT64 {
         int32_t newWindowLeft = INT32_MAX;
         int32_t newWindowTop = INT32_MAX;
 
-#   if defined(_WIN64)
+#   if defined(_WIN32)
         RECT rect;
         GetWindowRect(windowHandle, &rect);
         newWindowLeft = rect.left;

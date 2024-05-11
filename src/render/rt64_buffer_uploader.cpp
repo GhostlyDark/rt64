@@ -90,7 +90,7 @@ namespace RT64 {
             bufferPair.defaultViews.clear();
             
             // Recreate the buffer pair.
-            const uint64_t BlockAlignment = 256;
+            const size_t BlockAlignment = 256;
             bufferPair.allocatedSize = std::max((requiredSize * 3) / 2, BlockAlignment);
             bufferPair.allocatedSize = roundUp(bufferPair.allocatedSize, BlockAlignment);
             bufferPair.uploadBuffer = worker->device->createBuffer(RenderBufferDesc::UploadBuffer(bufferPair.allocatedSize));

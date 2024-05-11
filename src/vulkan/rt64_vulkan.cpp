@@ -42,7 +42,7 @@ namespace RT64 {
 
     static const std::unordered_set<std::string> RequiredInstanceExtensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
-#   if defined(_WIN64)
+#   if defined(_WIN32)
         VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 #   elif defined(__ANDROID__)
         VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
@@ -1615,7 +1615,7 @@ namespace RT64 {
 
         this->descriptorSetCount = uint32_t(pipelineLayout->descriptorSetLayouts.size());
 
-        VkResult res = vkCreateRayTracingPipelinesKHR(device->vk, nullptr, nullptr, 1, &pipelineInfo, nullptr, &vk);
+        VkResult res = vkCreateRayTracingPipelinesKHR(device->vk, (VkDeferredOperationKHR) nullptr, (VkPipelineCache) nullptr, 1, &pipelineInfo, nullptr, &vk);
         if (res != VK_SUCCESS) {
             fprintf(stderr, "vkCreateRayTracingPipelinesKHR failed with error code 0x%X.\n", res);
             return;
@@ -1824,7 +1824,7 @@ namespace RT64 {
 
         VkResult res;
 
-#   ifdef _WIN64
+#   ifdef _WIN32
         assert(renderWindow != 0);
         VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
         surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -2178,7 +2178,7 @@ namespace RT64 {
     }
 
     void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
-#   if defined(_WIN64)
+#   if defined(_WIN32)
         RECT rect;
         GetClientRect(renderWindow, &rect);
         dstWidth = rect.right - rect.left;

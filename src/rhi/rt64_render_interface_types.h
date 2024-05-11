@@ -11,7 +11,7 @@
 #include <vector>
 #include <cfloat>
 
-#if defined(_WIN64)
+#if defined(_WIN32)
 #include <Windows.h>
 #elif defined(__ANDROID__)
 #include "android/native_window.h"
@@ -23,7 +23,7 @@
 #endif
 
 namespace RT64 {
-#if defined(_WIN64)
+#if defined(_WIN32)
     // Native HWND handle to the target window.
     typedef HWND RenderWindow;
 #elif defined(__ANDROID__)
