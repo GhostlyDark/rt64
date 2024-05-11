@@ -159,7 +159,7 @@ namespace RT64 {
         bool loadConfiguration();
         bool saveConfiguration();
         bool checkDirectoryCreated(const std::filesystem::path &path);
-#   ifdef _WIN32
+#   if 0
         bool windowMessageFilter(unsigned int message, WPARAM wParam, LPARAM lParam) override;
         bool usesWindowMessageFilter() override;
 #   endif

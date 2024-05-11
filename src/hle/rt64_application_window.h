@@ -9,7 +9,7 @@
 #include <Windows.h>
 #endif
 
-#define RT64_SDL_WINDOW
+// #define RT64_SDL_WINDOW
 
 #ifdef RT64_SDL_WINDOW
 #   include "SDL_events.h"
@@ -25,7 +25,7 @@ namespace RT64 {
         struct Listener {
             // Return true if the listener should accept and handle the message.
             // Return false otherwise for the default message handler to take over.
-#       ifdef _WIN32
+#       if 0
             virtual bool windowMessageFilter(unsigned int message, WPARAM wParam, LPARAM lParam) = 0;
             virtual bool usesWindowMessageFilter() = 0;
 #       endif
@@ -48,17 +48,21 @@ namespace RT64 {
         ApplicationWindow();
         ~ApplicationWindow();
         void setup(RenderWindow window, Listener *listener, uint32_t threadId);
+#ifdef RT64_SDL_WINDOW
         void setup(const char *windowTitle, Listener *listener);
+#endif
         void setFullScreen(bool newFullScreen);
         void makeResizable();
         void detectRefreshRate();
         uint32_t getRefreshRate() const;
         bool detectWindowMoved();
 
+#ifdef RT64_SDL_WINDOW
 #   ifdef _WIN32
         void windowMessage(UINT message, WPARAM wParam, LPARAM lParam);
         static LRESULT CALLBACK windowHookCallback(int nCode, WPARAM wParam, LPARAM lParam);
 #   endif
+#endif
 
 #   ifdef RT64_SDL_WINDOW
         SDL_EventFilter sdlEventFilter;

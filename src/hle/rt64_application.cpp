@@ -143,13 +143,17 @@ namespace RT64 {
 #   endif
 
         // Create the application window.
-        const char *windowTitle = "RT64";
         appWindow = std::make_unique<ApplicationWindow>();
         if (core.window != RenderWindow{}) {
             appWindow->setup(core.window, this, threadId);
         }
         else {
+#ifdef RT64_SDL_WINDOW
+            const char[] windowTitle = "RT64";
             appWindow->setup(windowTitle, this);
+#else
+            abort();
+#endif
         }
 
         // Detect refresh rate from the display the window is located at.
@@ -393,7 +397,7 @@ namespace RT64 {
         rasterShaderCache->resetOfflineList();
     }
 
-#ifdef _WIN32
+#ifdef RT64_SDL_WINDOW
     bool Application::windowMessageFilter(unsigned int message, WPARAM wParam, LPARAM lParam) {
         if (userConfig.developerMode && (presentQueue != nullptr) && (state != nullptr) && !FileDialog::isOpen) {
             const std::lock_guard<std::mutex> lock(presentQueue->inspectorMutex);

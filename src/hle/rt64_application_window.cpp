@@ -24,8 +24,10 @@ namespace RT64 {
     
     ApplicationWindow::ApplicationWindow() {
         windowHandle = {};
+#ifdef RT64_SDL_WINDOW
         sdlEventFilterUserdata = nullptr;
         sdlEventFilterStored = false;
+#endif
         fullScreen = false;
         lastMaximizedState = false;
 #   ifdef _WIN32
@@ -53,6 +55,7 @@ namespace RT64 {
         this->listener = listener;
         windowHandle = window;
 
+#ifdef RT64_SDL_WINDOW
 #   ifdef _WIN32
         if (listener->usesWindowMessageFilter()) {
             assert(HookedApplicationWindow == nullptr);
@@ -61,8 +64,10 @@ namespace RT64 {
             HookedApplicationWindow = this;
         }
 #   endif
+#endif
     }
 
+#ifdef RT64_SDL_WINDOW
     void ApplicationWindow::setup(const char *windowTitle, Listener *listener) {
         assert(windowTitle != nullptr);
 
@@ -137,6 +142,7 @@ namespace RT64 {
         setup(windowHandle, listener, pthread_self());
 #   endif
     }
+#endif
 
     void ApplicationWindow::setFullScreen(bool newFullScreen) {
         if (newFullScreen == fullScreen) {
@@ -292,7 +298,8 @@ namespace RT64 {
         }
     }
 
-#   ifdef _WIN32
+#ifdef RT64_SDL_WINDOW
+#ifdef _WIN32
     void ApplicationWindow::windowMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (listener->windowMessageFilter(message, wParam, lParam)) {
             return;
@@ -315,7 +322,6 @@ namespace RT64 {
     }
 #   endif
 
-#ifdef RT64_SDL_WINDOW
     void ApplicationWindow::blockSdlKeyboard() {
         if (!usingSdl) {
             return;
@@ -351,9 +357,5 @@ namespace RT64 {
             return appWindow->sdlEventFilter(userdata, event);
         }
     }
-
-
-#else
-    static_assert(false && "Unimplemented");
 #endif
 };
