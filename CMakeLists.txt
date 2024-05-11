@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(rt64)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 function(preprocess INFILE OUTFILE OPTIONS)
@@ -21,13 +21,22 @@ function(preprocess INFILE OUTFILE OPTIONS)
     endif()
 endfunction()
 
+
+if (WIN32)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set (ARCH "x64")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set (ARCH "x86")
+    endif()
+endif()
+
 if (WIN32)
     set (DXC "${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxc.exe")
     add_compile_definitions(NOMINMAX)
 
     # Dependencies that must be next to the DLL.
-    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxcompiler.dll" "dxcompiler.dll" COPYONLY)
-    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxil.dll" "dxil.dll" COPYONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/${ARCH}/dxcompiler.dll" "dxcompiler.dll" COPYONLY)
+    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/${ARCH}/dxil.dll" "dxil.dll" COPYONLY)
 else()
     set (DXC "LD_LIBRARY_PATH=${PROJECT_SOURCE_DIR}/src/contrib/dxc/lib/x64" "${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxc")
 endif()
@@ -160,17 +169,6 @@ function(build_ray_shader TARGETOBJ SHADERNAME)
     endif()
 endfunction()
 
-# Point cmake at src/contrib/mupen64plus-win32-deps/SDL2-2.26.3 for SDL2 on windows, look for an installed package on other systems
-if (${WIN32})
-    set(SDL2_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src/contrib/mupen64plus-win32-deps/SDL2-2.26.3/include")
-    set(SDL2_LIBRARIES "SDL2" "SDL2main")
-    link_directories("${PROJECT_SOURCE_DIR}/src/contrib/mupen64plus-win32-deps/SDL2-2.26.3/lib/x64")
-else()
-    find_package(SDL2 REQUIRED)
-endif()
-
-message(STATUS "${SDL2_INCLUDE_DIRS} ${SDL2_LIBRARIES}")
-
 add_compile_definitions(
     HLSL_CPU
     FFX_GCC
@@ -276,11 +274,14 @@ set (SOURCES
     "${PROJECT_SOURCE_DIR}/src/contrib/implot/implot.cpp"
     "${PROJECT_SOURCE_DIR}/src/contrib/implot/implot_demo.cpp"
     "${PROJECT_SOURCE_DIR}/src/contrib/implot/implot_items.cpp"
+
+    "${PROJECT_SOURCE_DIR}/src/plugin/plugin.cpp"
+    "${PROJECT_SOURCE_DIR}/src/plugin/queue_executor.cpp"
 )
 
 include_directories(
-    "${SDL2_INCLUDE_DIRS}"
     "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/src/plugin"
     "${PROJECT_SOURCE_DIR}/src/contrib"
     "${PROJECT_SOURCE_DIR}/src/contrib/D3D12MemoryAllocator/include"
     "${PROJECT_SOURCE_DIR}/src/contrib/D3D12MemoryAllocator/src"
@@ -318,14 +319,10 @@ if (${WIN32})
         D3D12
         DXGI
         Shcore.lib
-        ${PROJECT_SOURCE_DIR}/src/contrib/dxc/lib/x64/dxcompiler.lib)
+        ${PROJECT_SOURCE_DIR}/src/contrib/dxc/lib/${ARCH}/dxcompiler.lib)
 endif()
 
 target_link_directories(rt64 PRIVATE ${PROJECT_SOURCE_DIR}/src/contrib/dxc)
-
-if (NOT ANDROID)
-    target_link_libraries(rt64 ${SDL2_LIBRARIES})
-endif()
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     find_package(X11 REQUIRED)

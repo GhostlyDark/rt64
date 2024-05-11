@@ -165,7 +165,7 @@ namespace RT64 {
 
     void Inspector::setIniPath(const std::filesystem::path &path) {
         ImGuiIO &io = ImGui::GetIO();
-        IniFilenameUTF8 = path.u8string();
+        IniFilenameUTF8 = path.string();
         io.IniFilename = IniFilenameUTF8.c_str();
     }
     
