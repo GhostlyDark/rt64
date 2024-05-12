@@ -8,7 +8,7 @@ namespace RT64 {
     // EmulatorConfiguration
 
     EmulatorConfiguration::EmulatorConfiguration() {
-        framebuffer.renderToRAM = true;
+        framebuffer.renderToRAM = false;
         framebuffer.copyWithGPU = true;
     }
 };

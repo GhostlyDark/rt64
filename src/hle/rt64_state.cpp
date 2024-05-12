@@ -516,6 +516,7 @@ namespace RT64 {
     }
     
     void State::checkRDRAM() {
+        return;
         if (!rdramCheckPending) {
             return;
         }

@@ -30,15 +30,15 @@ enum class GraphicsApi {
 };
 
 struct Config {
-    Resolution res_option = Resolution::Original2x;
+    Resolution res_option = Resolution::Auto;
     WindowMode wm_option = WindowMode::Windowed;
     HUDRatioMode hr_option = HUDRatioMode::Original;
     GraphicsApi api_option = GraphicsApi::D3D12;
     RT64::UserConfiguration::AspectRatio ar_option = RT64::UserConfiguration::AspectRatio::Original;
     RT64::UserConfiguration::Antialiasing msaa_option = RT64::UserConfiguration::Antialiasing::MSAA4X;
-    RT64::UserConfiguration::RefreshRate rr_option = RT64::UserConfiguration::RefreshRate::Display;
-    int rr_manual_value;
-    int ds_option = 1;
+    RT64::UserConfiguration::RefreshRate rr_option = RT64::UserConfiguration::RefreshRate::Original;
+    int rr_manual_value = 60;
+    int ds_option = 4;
     bool developer_mode;
 };
 
@@ -431,7 +431,7 @@ EXPORT void CALL RomOpen(void)
 
     // TODO: refresh config
     gRSPQueue.start(true /*sameThreadExec*/);
-    gRSPQueue.async(plugin_init);
+    gRSPQueue.sync(plugin_init);
 }
 
 /******************************************************************
@@ -444,6 +444,7 @@ EXPORT void CALL RomOpen(void)
 *******************************************************************/
 EXPORT void CALL ShowCFB(void)
 {
+    gRSPQueue.sync(plugin_draw);
     // gRSPQueue.async(plugin_draw);
 }
 
@@ -457,7 +458,7 @@ EXPORT void CALL ShowCFB(void)
 *******************************************************************/
 EXPORT void CALL UpdateScreen(void)
 {
-    gRSPQueue.async(plugin_draw);
+    gRSPQueue.sync(plugin_draw);
     // ShowCFB();
 }
 

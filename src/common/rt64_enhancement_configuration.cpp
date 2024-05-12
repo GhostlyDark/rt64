@@ -9,7 +9,7 @@ namespace RT64 {
     
     EnhancementConfiguration::EnhancementConfiguration() {
         framebuffer.reinterpretFixULS = true;
-        presentation.mode = Presentation::Mode::SkipBuffering;
+        presentation.mode = Presentation::Mode::PresentEarly;
         rect.fixRectLR = true;
         f3dex.forceBranch = false;
         s2dex.fixBilerpMismatch = true;
