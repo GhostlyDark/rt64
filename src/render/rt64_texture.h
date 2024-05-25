@@ -15,6 +15,7 @@ namespace RT64 {
         RenderFormat format = RenderFormat::UNKNOWN;
         int width = 0;
         int height = 0;
+        int mipmaps = 0;
 
         // These are only stored if developer mode is enabled.
         std::vector<uint8_t> bytesTMEM;

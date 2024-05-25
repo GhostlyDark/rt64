@@ -143,6 +143,48 @@ namespace RT64 {
             return DXGI_FORMAT_R8_SNORM;
         case RenderFormat::R8_SINT:
             return DXGI_FORMAT_R8_SINT;
+        case RenderFormat::BC1_TYPELESS:
+            return DXGI_FORMAT_BC1_TYPELESS;
+        case RenderFormat::BC1_UNORM:
+            return DXGI_FORMAT_BC1_UNORM;
+        case RenderFormat::BC1_UNORM_SRGB:
+            return DXGI_FORMAT_BC1_UNORM_SRGB;
+        case RenderFormat::BC2_TYPELESS:
+            return DXGI_FORMAT_BC2_TYPELESS;
+        case RenderFormat::BC2_UNORM:
+            return DXGI_FORMAT_BC2_UNORM;
+        case RenderFormat::BC2_UNORM_SRGB:
+            return DXGI_FORMAT_BC2_UNORM_SRGB;
+        case RenderFormat::BC3_TYPELESS:
+            return DXGI_FORMAT_BC3_TYPELESS;
+        case RenderFormat::BC3_UNORM:
+            return DXGI_FORMAT_BC3_UNORM;
+        case RenderFormat::BC3_UNORM_SRGB:
+            return DXGI_FORMAT_BC3_UNORM_SRGB;
+        case RenderFormat::BC4_TYPELESS:
+            return DXGI_FORMAT_BC4_TYPELESS;
+        case RenderFormat::BC4_UNORM:
+            return DXGI_FORMAT_BC4_UNORM;
+        case RenderFormat::BC4_SNORM:
+            return DXGI_FORMAT_BC4_SNORM;
+        case RenderFormat::BC5_TYPELESS:
+            return DXGI_FORMAT_BC5_TYPELESS;
+        case RenderFormat::BC5_UNORM:
+            return DXGI_FORMAT_BC5_UNORM;
+        case RenderFormat::BC5_SNORM:
+            return DXGI_FORMAT_BC5_SNORM;
+        case RenderFormat::BC6H_TYPELESS:
+            return DXGI_FORMAT_BC6H_TYPELESS;
+        case RenderFormat::BC6H_UF16:
+            return DXGI_FORMAT_BC6H_UF16;
+        case RenderFormat::BC6H_SF16:
+            return DXGI_FORMAT_BC6H_SF16;
+        case RenderFormat::BC7_TYPELESS:
+            return DXGI_FORMAT_BC7_TYPELESS;
+        case RenderFormat::BC7_UNORM:
+            return DXGI_FORMAT_BC7_UNORM;
+        case RenderFormat::BC7_UNORM_SRGB:
+            return DXGI_FORMAT_BC7_UNORM_SRGB;
         default:
             assert(false && "Unknown format.");
             return DXGI_FORMAT_FORCE_UINT;
@@ -258,7 +300,7 @@ namespace RT64 {
         }
     }
 
-    static D3D12_FILTER toFilter(RenderFilter minFilter, RenderFilter magFilter, RenderMipmapMode mipmapMode, bool anisotropyEnabled, bool comparisonEnabled) {
+    static D3D12_FILTER toFilter(RenderFilter minFilter, RenderFilter magFilter, RenderMipmapMode mipmapMode, bool comparisonEnabled) {
         assert(minFilter != RenderFilter::UNKNOWN);
         assert(magFilter != RenderFilter::UNKNOWN);
         assert(mipmapMode != RenderMipmapMode::UNKNOWN);
@@ -267,7 +309,6 @@ namespace RT64 {
         filterInt |= (mipmapMode == RenderMipmapMode::LINEAR) ? 0x1 : 0x0;
         filterInt |= (magFilter == RenderFilter::LINEAR) ? 0x4 : 0x0;
         filterInt |= (minFilter == RenderFilter::LINEAR) ? 0x10 : 0x0;
-        filterInt |= anisotropyEnabled ? 0x40 : 0x0;
         filterInt |= comparisonEnabled ? 0x80 : 0x0;
         return D3D12_FILTER(filterInt);
     }
@@ -543,6 +584,8 @@ namespace RT64 {
         }
         case RenderTextureCopyType::PLACED_FOOTPRINT: {
             const D3D12Buffer *interfaceBuffer = static_cast<const D3D12Buffer *>(location.buffer);
+            const uint32_t blockWidth = RenderFormatBlockWidth(location.placedFootprint.format);
+            const uint32_t blockCount = (location.placedFootprint.rowWidth + blockWidth - 1) / blockWidth;
             loc.pResource = (interfaceBuffer != nullptr) ? interfaceBuffer->d3d : nullptr;
             loc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
             loc.PlacedFootprint.Offset = location.placedFootprint.offset;
@@ -550,7 +593,7 @@ namespace RT64 {
             loc.PlacedFootprint.Footprint.Width = location.placedFootprint.width;
             loc.PlacedFootprint.Footprint.Height = location.placedFootprint.height;
             loc.PlacedFootprint.Footprint.Depth = location.placedFootprint.depth;
-            loc.PlacedFootprint.Footprint.RowPitch = location.placedFootprint.rowWidth * RenderFormatSize(location.placedFootprint.format);
+            loc.PlacedFootprint.Footprint.RowPitch = blockCount * RenderFormatSize(location.placedFootprint.format);
             break;
         }
         default: {
@@ -2362,12 +2405,12 @@ namespace RT64 {
         this->borderColor = desc.borderColor;
         this->shaderVisibility = desc.shaderVisibility;
 
-        samplerDesc.Filter = toFilter(desc.minFilter, desc.magFilter, desc.mipmapMode, desc.anisotropyEnabled, desc.comparisonEnabled);
+        samplerDesc.Filter = toFilter(desc.minFilter, desc.magFilter, desc.mipmapMode, desc.comparisonEnabled);
         samplerDesc.AddressU = toD3D12(desc.addressU);
         samplerDesc.AddressV = toD3D12(desc.addressV);
         samplerDesc.AddressW = toD3D12(desc.addressW);
         samplerDesc.MipLODBias = desc.mipLODBias;
-        samplerDesc.MaxAnisotropy = desc.maxAnisotropy;
+        samplerDesc.MaxAnisotropy = desc.anisotropyEnabled ? desc.maxAnisotropy : 1;
         samplerDesc.ComparisonFunc = toD3D12(desc.comparisonFunc);
         samplerDesc.MinLOD = desc.minLOD;
         samplerDesc.MaxLOD = desc.maxLOD;
