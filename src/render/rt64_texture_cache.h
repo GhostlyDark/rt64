@@ -67,9 +67,15 @@ namespace RT64 {
         void removeUnusedEntriesFromDatabase();
         std::string getRelativePathFromHash(uint64_t tmemHash) const;
         Texture *getFromRelativePath(const std::string &relativePath) const;
-        Texture *loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr);
+        Texture *loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         uint64_t hashFromRelativePath(const std::string &relativePath) const;
         bool evict(uint64_t hash);
+    };
+
+    struct ReplacementCheck {
+        uint64_t hash = 0;
+        uint32_t minMipWidth = 0;
+        uint32_t minMipHeight = 0;
     };
 
     struct TextureMap {
@@ -104,7 +110,7 @@ namespace RT64 {
     struct TextureCache {
         const ShaderLibrary *shaderLibrary;
         std::vector<TextureUpload> uploadQueue;
-        std::vector<uint64_t> replacementQueue;
+        std::vector<ReplacementCheck> replacementQueue;
         std::vector<std::unique_ptr<RenderBuffer>> tmemUploadResources;
         std::vector<std::unique_ptr<RenderBuffer>> replacementUploadResources;
         std::vector<std::unique_ptr<TextureDecodeDescriptorSet>> descriptorSets;
@@ -136,7 +142,7 @@ namespace RT64 {
         void decrementLock();
         Texture *getTexture(uint32_t textureIndex);
         static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, int width, int height, int rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr);
-        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr);
+        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         static bool loadBytesFromPath(const std::filesystem::path &path, std::vector<uint8_t> &bytes);
     };
 };

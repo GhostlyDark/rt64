@@ -162,7 +162,7 @@ namespace RT64 {
         }
     }
 
-    Texture *ReplacementMap::loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool) {
+    Texture *ReplacementMap::loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool, uint32_t minMipWidth, uint32_t minMipHeight) {
         uint64_t pathHash = hashFromRelativePath(relativePath);
         if (pathHashToLoadMap.find(pathHash) != pathHashToLoadMap.end()) {
             assert(false && "Can't add a replacement texture with an existing hash.");
@@ -175,7 +175,7 @@ namespace RT64 {
         bool loadedTexture = false;
         switch (magicNumber) {
         case ddspp::DDS_MAGIC:
-            loadedTexture = TextureCache::setDDS(replacementTexture, worker, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool);
+            loadedTexture = TextureCache::setDDS(replacementTexture, worker, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool, minMipWidth, minMipHeight);
             break;
         case PNG_MAGIC: {
             int width, height;
@@ -625,7 +625,7 @@ namespace RT64 {
         }
     }
 
-    bool TextureCache::setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool) {
+    bool TextureCache::setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, uint32_t minMipWidth, uint32_t minMipHeight) {
         assert(dstTexture != nullptr);
         assert(worker != nullptr);
         assert(bytes != nullptr);
@@ -641,13 +641,24 @@ namespace RT64 {
         desc.width = ddsDescriptor.width;
         desc.height = ddsDescriptor.height;
         desc.depth = 1;
-        desc.mipLevels = ddsDescriptor.numMips;
+        desc.mipLevels = 1;
         desc.format = toRenderFormat(ddsDescriptor.format);
+
+        // Only load mipmaps as long as they're above a certain width and height.
+        for (uint32_t mip = 1; mip < ddsDescriptor.numMips; mip++) {
+            uint32_t mipWidth = std::max(desc.width >> mip, 1U);
+            uint32_t mipHeight = std::max(desc.height >> mip, 1U);
+            if ((mipWidth < minMipWidth) || (mipHeight < minMipHeight)) {
+                break;
+            }
+            
+            desc.mipLevels++;
+        }
 
         dstTexture->texture = worker->device->createTexture(desc);
         dstTexture->width = ddsDescriptor.width;
         dstTexture->height = ddsDescriptor.height;
-        dstTexture->mipmaps = ddsDescriptor.numMips;
+        dstTexture->mipmaps = desc.mipLevels;
         dstTexture->format = desc.format;
 
         const uint8_t *imageData = &bytes[ddsDescriptor.headerSize];
@@ -657,7 +668,7 @@ namespace RT64 {
         std::vector<uint32_t> mipmapOffsets;
         uint32_t imageDataPadding = 0;
         const uint32_t imageDataAlignment = 16;
-        for (uint32_t mip = 0; mip < ddsDescriptor.numMips; mip++) {
+        for (uint32_t mip = 0; mip < desc.mipLevels; mip++) {
             uint32_t ddsOffset = ddspp::get_offset(ddsDescriptor, mip, 0);
             uint32_t alignedOffset = ddsOffset + imageDataPadding;
             if ((alignedOffset % imageDataAlignment) != 0) {
@@ -679,7 +690,7 @@ namespace RT64 {
         uint32_t mipmapOffset = 0;
         uint8_t *dstData = reinterpret_cast<uint8_t *>(dstUploadResource->map());
         memset(dstData, 0, uploadBufferSize);
-        for (uint32_t mip = 0; mip < ddsDescriptor.numMips; mip++) {
+        for (uint32_t mip = 0; mip < desc.mipLevels; mip++) {
             uint32_t ddsOffset = ddspp::get_offset(ddsDescriptor, mip, 0);
             uint32_t ddsSize = ((mip + 1) < ddsDescriptor.numMips) ? (ddspp::get_offset(ddsDescriptor, mip + 1, 0) - ddsOffset) : (imageDataSize - ddsOffset);
             uint32_t mipOffset = mipmapOffsets[mip];
@@ -690,7 +701,7 @@ namespace RT64 {
         worker->commandList->barriers(RenderBarrierStage::COPY, RenderBufferBarrier(dstUploadResource.get(), RenderBufferAccess::READ));
         worker->commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
 
-        for (uint32_t mip = 0; mip < ddsDescriptor.numMips; mip++) {
+        for (uint32_t mip = 0; mip < desc.mipLevels; mip++) {
             uint32_t offset = mipmapOffsets[mip];
             uint32_t mipWidth = std::max(desc.width >> mip, 1U);
             uint32_t mipHeight = std::max(desc.height >> mip, 1U);
@@ -724,7 +735,7 @@ namespace RT64 {
 
         std::vector<TextureUpload> queueCopy;
         std::vector<TextureUpload> newQueue;
-        std::vector<uint64_t> replacementQueueCopy;
+        std::vector<ReplacementCheck> replacementQueueCopy;
         std::vector<Texture *> texturesUploaded;
         std::vector<Texture *> texturesReplaced;
         std::vector<RenderTextureBarrier> beforeCopyBarriers;
@@ -857,7 +868,7 @@ namespace RT64 {
                             afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i]->texture.get(), RenderTextureLayout::SHADER_READ));
 
                             // Add this hash so it's checked for a replacement.
-                            replacementQueueCopy.emplace_back(upload.hash);
+                            replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, uint32_t(upload.width), uint32_t(upload.height) });
                         }
                     }
 
@@ -865,14 +876,14 @@ namespace RT64 {
                         worker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
                     }
 
-                    for (uint64_t replacementHash : replacementQueueCopy) {
-                        std::string relativePath = textureMap.replacementMap.getRelativePathFromHash(replacementHash);
+                    for (const ReplacementCheck &replacementCheck : replacementQueueCopy) {
+                        std::string relativePath = textureMap.replacementMap.getRelativePathFromHash(replacementCheck.hash);
                         if (!relativePath.empty()) {
                             std::filesystem::path filePath = textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath);
                             Texture *replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
                             if ((replacementTexture == nullptr) && TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
                                 replacementUploadResources.emplace_back();
-                                replacementTexture = textureMap.replacementMap.loadFromBytes(worker, replacementHash, relativePath, replacementBytes, replacementUploadResources.back());
+                                replacementTexture = textureMap.replacementMap.loadFromBytes(worker, replacementCheck.hash, relativePath, replacementBytes, replacementUploadResources.back(), nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
                                 replacementsUploaded = true;
                             }
 
@@ -1013,7 +1024,14 @@ namespace RT64 {
             replacementQueue.clear();
             for (size_t i = 0; i < textureMap.hashes.size(); i++) {
                 if (textureMap.hashes[i] != 0) {
-                    replacementQueue.emplace_back(textureMap.hashes[i]);
+                    uint32_t minMipWidth = 0;
+                    uint32_t minMipHeight = 0;
+                    if (textureMap.textures[i] != nullptr) {
+                        minMipWidth = textureMap.textures[i]->width;
+                        minMipHeight = textureMap.textures[i]->height;
+                    }
+
+                    replacementQueue.emplace_back(ReplacementCheck{ textureMap.hashes[i], minMipWidth, minMipHeight });
                 }
             }
         }
