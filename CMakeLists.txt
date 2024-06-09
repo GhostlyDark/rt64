@@ -221,6 +221,9 @@ add_compile_definitions(
 )
 
 set (SOURCES
+    "${PROJECT_SOURCE_DIR}/src/api/rt64_api_common.cpp"
+    "${PROJECT_SOURCE_DIR}/src/api/rt64_api_plugin.cpp"
+
     "${PROJECT_SOURCE_DIR}/src/common/rt64_common.cpp"
     "${PROJECT_SOURCE_DIR}/src/common/rt64_dynamic_libraries.cpp"
     "${PROJECT_SOURCE_DIR}/src/common/rt64_elapsed_timer.cpp"
