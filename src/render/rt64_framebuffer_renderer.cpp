@@ -272,7 +272,7 @@ namespace RT64 {
                 gpuTile.flags.alphaIsCvg = false;
                 gpuTile.flags.highRes = textureReplaced;
                 gpuTile.flags.fromCopy = false;
-                gpuTile.flags.rawTMEM = callTile.rawTMEM;
+                gpuTile.flags.rawTMEM = !textureReplaced && callTile.rawTMEM;
                 gpuTile.flags.hasMipmaps = hasMipmaps;
             }
         }
