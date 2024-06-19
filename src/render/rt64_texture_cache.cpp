@@ -864,7 +864,9 @@ namespace RT64 {
                             worker->commandList->dispatch(dispatchX, dispatchY, 1);
 
                             afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i]->texture.get(), RenderTextureLayout::SHADER_READ));
-
+                        }
+                        
+                        if ((upload.width > 0) && (upload.height > 0)) {
                             // Add this hash so it's checked for a replacement.
                             replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, uint32_t(upload.width), uint32_t(upload.height) });
                         }
