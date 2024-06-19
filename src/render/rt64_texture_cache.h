@@ -43,6 +43,7 @@ namespace RT64 {
         uint32_t tlut;
         LoadTile loadTile;
         std::vector<uint8_t> bytesTMEM;
+        bool decodeTMEM;
     };
 
     typedef std::pair<uint32_t, uint64_t> AccessPair;
@@ -129,7 +130,7 @@ namespace RT64 {
         TextureCache(RenderWorker *worker, const ShaderLibrary *shaderLibrary, bool developerMode);
         ~TextureCache();
         void uploadThreadLoop();
-        void queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile);
+        void queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile, bool decodeTMEM);
         void waitForGPUUploads();
         bool useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex, interop::float2 &textureScale, bool &textureReplaced, bool &hasMipmaps);
         bool useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex);

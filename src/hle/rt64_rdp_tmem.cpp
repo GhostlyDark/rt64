@@ -11,7 +11,7 @@
 namespace RT64 {
     // TextureManager
 
-    uint64_t TextureManager::uploadTMEM(State *state, TextureCache *textureCache, uint64_t creationFrame, uint16_t byteOffset, uint16_t byteCount) {
+    uint64_t TextureManager::uploadTMEM(State *state, const LoadTile &loadTile, TextureCache *textureCache, uint64_t creationFrame, uint16_t byteOffset, uint16_t byteCount, uint16_t width, uint16_t height, uint32_t tlut) {
         XXH3_state_t xxh3;
         XXH3_64bits_reset(&xxh3);
         const uint8_t *TMEM = reinterpret_cast<const uint8_t *>(state->rdp->TMEM);
@@ -21,7 +21,17 @@ namespace RT64 {
         const uint64_t hash = XXH3_64bits_digest(&xxh3);
         if (hashSet.find(hash) == hashSet.end()) {
             hashSet.insert(hash);
-            textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, 0, 0, 0, LoadTile());
+            textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, width, height, 0, LoadTile(), false);
+        }
+
+        // Dump memory contents into a file if the process is active.
+        if (!state->dumpingTexturesDirectory.empty()) {
+            // Since width and height are not exactly guaranteed to be sane values when using raw TMEM, ensure we only dump textures when the values make sense.
+            const bool validTextureCheck = (width > 0x0) && (height > 0x0);
+            const bool bigTextureCheck = (width > 0x1000) || (height > 0x1000);
+            if (validTextureCheck && !bigTextureCheck) {
+                dumpTexture(hash, state, loadTile, width, height, tlut);
+            }
         }
 
         return hash;
@@ -55,7 +65,7 @@ namespace RT64 {
         if (RGBA32) {
             hashTMEM(tmemSize);
         }
-        
+
         // If TLUT is active, we also hash the corresponding palette bytes.
         if (tlut > 0) {
             const bool CI4 = (loadTile.siz == G_IM_SIZ_4b);
@@ -76,7 +86,7 @@ namespace RT64 {
         const uint64_t hash = XXH3_64bits_digest(&xxh3);
         if (hashSet.find(hash) == hashSet.end()) {
             hashSet.insert(hash);
-            textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, width, height, tlut, loadTile);
+            textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, width, height, tlut, loadTile, true);
         }
 
         // Dump memory contents into a file if the process is active.

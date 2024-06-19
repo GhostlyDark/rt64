@@ -616,7 +616,7 @@ namespace RT64 {
 
             if (!callTile.tileCopyUsed) {
                 if (callTile.rawTMEM) {
-                    callTile.tmemHashOrID = textureManager.uploadTMEM(this, ext.textureCache, workload.submissionFrame, 0, RDP_TMEM_BYTES);
+                    callTile.tmemHashOrID = textureManager.uploadTMEM(this, callTile.loadTile, ext.textureCache, workload.submissionFrame, 0, RDP_TMEM_BYTES, callTile.sampleWidth, callTile.sampleHeight, callTile.tlut);
                 }
                 else {
                     callTile.tmemHashOrID = textureManager.uploadTexture(this, callTile.loadTile, ext.textureCache, workload.submissionFrame, callTile.sampleWidth, callTile.sampleHeight, callTile.tlut);
@@ -667,7 +667,7 @@ namespace RT64 {
                     const bool CI4 = (callTile.loadTile.siz == G_IM_SIZ_4b);
                     const uint16_t byteOffset = (RDP_TMEM_BYTES >> 1) + (CI4 ? (callTile.loadTile.palette << 7) : 0);
                     const uint16_t byteCount = CI4 ? 0x100 : 0x800;
-                    tlutHash = textureManager.uploadTMEM(this, ext.textureCache, workload.submissionFrame, byteOffset, byteCount);
+                    tlutHash = textureManager.uploadTMEM(this, {}, ext.textureCache, workload.submissionFrame, byteOffset, byteCount, 0, 0, 0);
                 }
 
                 // Create a tile copy and tile reinterperation operation and queue it.
@@ -2347,7 +2347,7 @@ namespace RT64 {
                     }
 #               endif
                     ImGui::NewLine();
-                    
+
                     ImGui::Text("Offline Shaders: %d", ext.rasterShaderCache->offlineList.entries.size());
                     ImGui::Text("Specialized Shaders: %d", ext.rasterShaderCache->shaderCount());
 

@@ -794,9 +794,9 @@ namespace RT64 {
                         }
 
                         newTexture->format = RenderFormat::R8_UINT;
-                        newTexture->width = int(upload.bytesTMEM.size());
-                        newTexture->height = 1;
-                        newTexture->tmem = worker->device->createTexture(RenderTextureDesc::Texture1D(newTexture->width, newTexture->height, newTexture->format));
+                        newTexture->width = upload.width;
+                        newTexture->height = upload.height;
+                        newTexture->tmem = worker->device->createTexture(RenderTextureDesc::Texture1D(uint32_t(upload.bytesTMEM.size()), 1, newTexture->format));
                         newTexture->tmem->setName("Texture Cache TMEM #" + std::to_string(TMEMGlobalCounter++));
 
                         void *dstData = tmemUploadResources[i]->map();
@@ -820,12 +820,10 @@ namespace RT64 {
 
                         beforeDecodeBarriers.emplace_back(RenderTextureBarrier(dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ));
 
-                        if ((upload.width > 0) && (upload.height > 0)) {
+                        if (upload.decodeTMEM) {
                             static uint32_t TextureGlobalCounter = 0;
                             TextureDecodeDescriptorSet *descSet = descriptorSets[i].get();
                             dstTexture->format = RenderFormat::R8G8B8A8_UNORM;
-                            dstTexture->width = upload.width;
-                            dstTexture->height = upload.height;
                             dstTexture->texture = worker->device->createTexture(RenderTextureDesc::Texture2D(upload.width, upload.height, 1, dstTexture->format, RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS));
                             dstTexture->texture->setName("Texture Cache RGBA32 #" + std::to_string(TextureGlobalCounter++));
                             descSet->setTexture(descSet->TMEM, dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ);
@@ -841,7 +839,7 @@ namespace RT64 {
                     afterDecodeBarriers.clear();
                     for (size_t i = 0; i < queueSize; i++) {
                         const TextureUpload &upload = queueCopy[i];
-                        if ((upload.width > 0) && (upload.height > 0)) {
+                        if (upload.decodeTMEM) {
                             if (!pipelineSet) {
                                 worker->commandList->setPipeline(textureDecode.pipeline.get());
                                 worker->commandList->setComputePipelineLayout(textureDecode.pipelineLayout.get());
@@ -924,7 +922,7 @@ namespace RT64 {
         }
     }
 
-    void TextureCache::queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile) {
+    void TextureCache::queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile, bool decodeTMEM) {
         assert(bytes != nullptr);
         assert(bytesCount > 0);
 
@@ -936,6 +934,7 @@ namespace RT64 {
         newUpload.tlut = tlut;
         newUpload.loadTile = loadTile;
         newUpload.bytesTMEM = std::vector<uint8_t>(bytes, bytes + bytesCount);
+        newUpload.decodeTMEM = decodeTMEM;
 
         {
             const std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
