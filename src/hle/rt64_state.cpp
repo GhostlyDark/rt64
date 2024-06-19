@@ -2169,7 +2169,9 @@ namespace RT64 {
                     if (!textureReplacementPath.empty()) {
                         ImGui::SameLine();
                         const bool removeUnused = ImGui::Button("Remove Unused Entries");
-                        ext.textureCache->removeUnusedEntriesFromDatabase();
+                        if (removeUnused) {
+                            ext.textureCache->removeUnusedEntriesFromDatabase();
+                        }
                     }
 
                     ImGui::EndTabItem();
