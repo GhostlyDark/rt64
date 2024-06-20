@@ -57,6 +57,10 @@ namespace RT64 {
         ReplacementLoad load = ReplacementLoad::Stream;
         ReplacementLife life = ReplacementLife::Pool;
         ReplacementHashes hashes;
+
+        bool isEmpty() const {
+            return path.empty();
+        }
     };
 
     struct ReplacementDatabase {
@@ -65,6 +69,7 @@ namespace RT64 {
         std::unordered_map<uint64_t, uint32_t> tmemHashToReplaceMap;
 
         void addReplacement(const ReplacementTexture &texture);
+        ReplacementTexture getReplacement(const std::string &hash) const;
         void buildHashMaps();
         static uint64_t stringToHash(const std::string &str);
         static std::string hashToString(uint32_t hash);

@@ -279,7 +279,7 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
     }
 
     uint32_t riceCrc = RiceCRC32(rdramBytes.data(), width, height, drawTile.siz, bpl);
-    RT64::ReplacementTexture replacement;
+    RT64::ReplacementTexture replacement = database.getReplacement(hashName);
     replacement.hashes.rt64v1 = hashName;
     replacement.hashes.rice = RT64::ReplacementDatabase::hashToString(riceCrc) + "#" + std::to_string(drawTile.fmt) + "#" + std::to_string(drawTile.siz);
 

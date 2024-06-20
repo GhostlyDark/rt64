@@ -14,7 +14,19 @@ namespace RT64 {
             textures[it->second] = texture;
         }
         else {
+            tmemHashToReplaceMap[rt64v1] = uint32_t(textures.size());
             textures.emplace_back(texture);
+        }
+    }
+
+    ReplacementTexture ReplacementDatabase::getReplacement(const std::string &hash) const {
+        const uint64_t rt64v1 = stringToHash(hash);
+        auto it = tmemHashToReplaceMap.find(rt64v1);
+        if (it != tmemHashToReplaceMap.end()) {
+            return textures[it->second];
+        }
+        else {
+            return ReplacementTexture();
         }
     }
 
