@@ -190,22 +190,24 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
         return sampleTextureLevel(rdpTile, gpuTile, filterBilerp, filterAverage, linearFiltering, uvCoord, textureIndex, tlut, canDecodeTMEM, 0, usesHDR);
     }
     else {
+        // Retrieve the dimensions of the texture for either type of sampler.
+        Texture2D texture = gTextures[NonUniformResourceIndex(textureIndex)];
+        uint textureWidth, textureHeight, textureLevels;
+        texture.GetDimensions(0, textureWidth, textureHeight, textureLevels);
+        
         if (nativeSampler == NATIVE_SAMPLER_NONE) {
             float2 ddxUVxScaled = ddxUVx * gpuTile.tcScale;
             float2 ddxUVyScaled = ddyUVy * gpuTile.tcScale;
             float ddMax = max(dot(ddxUVxScaled, ddxUVxScaled), dot(ddxUVyScaled, ddxUVyScaled));
             float mipBias = -0.5f;
             float mip = 0.5 * log2(ddMax) + mipBias;
-            float4 hiLevel = sampleTextureLevel(rdpTile, gpuTile, filterBilerp, filterAverage, linearFiltering, uvCoord, textureIndex, tlut, canDecodeTMEM, floor(mip), usesHDR);
-            float4 loLevel = sampleTextureLevel(rdpTile, gpuTile, filterBilerp, filterAverage, linearFiltering, uvCoord, textureIndex, tlut, canDecodeTMEM, floor(mip) + 1, usesHDR);
+            float maxMip = float(textureLevels - 1);
+            float4 hiLevel = sampleTextureLevel(rdpTile, gpuTile, filterBilerp, filterAverage, linearFiltering, uvCoord, textureIndex, tlut, canDecodeTMEM, min(floor(mip), maxMip), usesHDR);
+            float4 loLevel = sampleTextureLevel(rdpTile, gpuTile, filterBilerp, filterAverage, linearFiltering, uvCoord, textureIndex, tlut, canDecodeTMEM, min(floor(mip) + 1, maxMip), usesHDR);
             return lerp(hiLevel, loLevel, frac(mip));
         }
         else {
             // Must normalize the texture coordinate and the derivatives.
-            Texture2D texture = gTextures[NonUniformResourceIndex(textureIndex)];
-            uint textureWidth, textureHeight, textureLevels;
-            texture.GetDimensions(0, textureWidth, textureHeight, textureLevels);
-            
             float2 nativeUVCoord = uvCoord / float2(textureWidth, textureHeight);
             float2 originalSize = float2(textureWidth, textureHeight) / gpuTile.tcScale;
             float2 ddxUVxNorm = ddxUVx / originalSize;
