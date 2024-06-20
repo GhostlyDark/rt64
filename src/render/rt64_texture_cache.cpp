@@ -38,7 +38,6 @@ namespace RT64 {
         loadedTextures.clear();
         evictedTextures.clear();
         loadedTexturePathHash.clear();
-        textureHashToLoadMap.clear();
         pathHashToLoadMap.clear();
     }
 
@@ -196,9 +195,7 @@ namespace RT64 {
         }
 
         if (loadedTexture) {
-            replacementTexture->hash = hash;
             pathHashToLoadMap[pathHash] = uint32_t(loadedTextures.size());
-            textureHashToLoadMap[hash] = uint32_t(loadedTextures.size());
             loadedTextures.emplace_back(replacementTexture);
             loadedTexturePathHash.emplace_back(pathHash);
             return replacementTexture;
@@ -211,12 +208,6 @@ namespace RT64 {
 
     uint64_t ReplacementMap::hashFromRelativePath(const std::string &relativePath) const {
         return XXH3_64bits(relativePath.data(), relativePath.size());
-    }
-
-    bool ReplacementMap::evict(uint64_t hash) {
-        // TODO: Missing hash to load map.
-
-        return false;
     }
 
     // TextureMap
@@ -736,8 +727,8 @@ namespace RT64 {
         std::vector<TextureUpload> queueCopy;
         std::vector<TextureUpload> newQueue;
         std::vector<ReplacementCheck> replacementQueueCopy;
-        std::vector<Texture *> texturesUploaded;
-        std::vector<Texture *> texturesReplaced;
+        std::vector<HashTexturePair> texturesUploaded;
+        std::vector<HashTexturePair> texturesReplaced;
         std::vector<RenderTextureBarrier> beforeCopyBarriers;
         std::vector<RenderTextureBarrier> beforeDecodeBarriers;
         std::vector<RenderTextureBarrier> afterDecodeBarriers;
@@ -785,9 +776,8 @@ namespace RT64 {
                         static uint32_t TMEMGlobalCounter = 0;
                         const TextureUpload &upload = queueCopy[i];
                         Texture *newTexture = new Texture();
-                        newTexture->hash = upload.hash;
                         newTexture->creationFrame = upload.creationFrame;
-                        texturesUploaded.emplace_back(newTexture);
+                        texturesUploaded.emplace_back(HashTexturePair{ upload.hash, newTexture });
 
                         if (developerMode) {
                             newTexture->bytesTMEM = upload.bytesTMEM;
@@ -812,9 +802,9 @@ namespace RT64 {
                     for (size_t i = 0; i < queueSize; i++) {
                         const TextureUpload &upload = queueCopy[i];
                         const uint32_t byteCount = uint32_t(upload.bytesTMEM.size());
-                        Texture *dstTexture = texturesUploaded[i];
+                        Texture *dstTexture = texturesUploaded[i].texture;
                         worker->commandList->copyTextureRegion(
-                            RenderTextureCopyLocation::Subresource(texturesUploaded[i]->tmem.get()), 
+                            RenderTextureCopyLocation::Subresource(dstTexture->tmem.get()),
                             RenderTextureCopyLocation::PlacedFootprint(tmemUploadResources[i].get(), RenderFormat::R8_UINT, byteCount, 1, 1, byteCount)
                         );
 
@@ -863,7 +853,7 @@ namespace RT64 {
                             worker->commandList->setComputeDescriptorSet(descriptorSets[i]->get(), 0);
                             worker->commandList->dispatch(dispatchX, dispatchY, 1);
 
-                            afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i]->texture.get(), RenderTextureLayout::SHADER_READ));
+                            afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i].texture->texture.get(), RenderTextureLayout::SHADER_READ));
                         }
                         
                         if ((upload.width > 0) && (upload.height > 0)) {
@@ -888,7 +878,7 @@ namespace RT64 {
                             }
 
                             if (replacementTexture != nullptr) {
-                                texturesReplaced.emplace_back(replacementTexture);
+                                texturesReplaced.emplace_back(HashTexturePair{ replacementCheck.hash, replacementTexture });
                             }
                         }
                     }
@@ -902,12 +892,12 @@ namespace RT64 {
                 // Add all the textures to the map once they're ready.
                 {
                     const std::unique_lock<std::mutex> lock(textureMapMutex);
-                    for (Texture *texture : texturesUploaded) {
-                        textureMap.add(texture->hash, texture->creationFrame, texture);
+                    for (const HashTexturePair &pair : texturesUploaded) {
+                        textureMap.add(pair.hash, pair.texture->creationFrame, pair.texture);
                     }
 
-                    for (Texture *texture : texturesReplaced) {
-                        textureMap.replace(texture->hash, texture);
+                    for (const HashTexturePair &pair : texturesReplaced) {
+                        textureMap.replace(pair.hash, pair.texture);
                     }
                 }
 
@@ -964,15 +954,15 @@ namespace RT64 {
         bool hasMipmaps;
         return useTexture(hash, submissionFrame, textureIndex, textureScale, textureReplaced, hasMipmaps);
     }
-
+    
     bool TextureCache::addReplacement(uint64_t hash, const std::string &relativePath) {
+        // TODO: The case where a replacement is reloaded needs to be handled correctly. Multiple hashes can point to the same path. All hashes pointing to that path must be reloaded correctly.
+
         const std::unique_lock<std::mutex> lock(textureMapMutex);
         std::vector<uint8_t> replacementBytes;
         if (!TextureCache::loadBytesFromPath(textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath), replacementBytes)) {
             return false;
         }
-        
-        textureMap.replacementMap.evict(hash);
 
         // Load texture replacement immediately.
         std::unique_ptr<RenderBuffer> dstUploadBuffer;

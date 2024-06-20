@@ -8,7 +8,6 @@
 
 namespace RT64 {
     struct Texture {
-        uint64_t hash = 0;
         uint64_t creationFrame = 0;
         std::unique_ptr<RenderTexture> texture;
         std::unique_ptr<RenderTexture> tmem;

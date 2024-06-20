@@ -54,7 +54,6 @@ namespace RT64 {
         std::vector<Texture *> loadedTextures;
         std::vector<Texture *> evictedTextures;
         std::vector<uint64_t> loadedTexturePathHash;
-        std::unordered_map<uint64_t, uint32_t> textureHashToLoadMap;
         std::unordered_map<uint64_t, uint32_t> pathHashToLoadMap;
         std::unordered_map<uint64_t, std::string> autoPathMap;
         std::filesystem::path directoryPath;
@@ -70,13 +69,17 @@ namespace RT64 {
         Texture *getFromRelativePath(const std::string &relativePath) const;
         Texture *loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         uint64_t hashFromRelativePath(const std::string &relativePath) const;
-        bool evict(uint64_t hash);
     };
 
     struct ReplacementCheck {
         uint64_t hash = 0;
         uint32_t minMipWidth = 0;
         uint32_t minMipHeight = 0;
+    };
+
+    struct HashTexturePair {
+        uint64_t hash = 0;
+        Texture *texture = nullptr;
     };
 
     struct TextureMap {
