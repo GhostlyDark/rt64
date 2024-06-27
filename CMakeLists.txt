@@ -340,6 +340,12 @@ if (WIN32)
         "${PROJECT_SOURCE_DIR}/src/contrib/imgui/backends/imgui_impl_dx12.cpp"
         "${PROJECT_SOURCE_DIR}/src/contrib/imgui/backends/imgui_impl_win32.cpp"
     )
+
+    # Required for emulators
+    target_link_options(rt64 PRIVATE "/DELAYLOAD:dxcompiler.dll")
+    target_link_options(rt64 PRIVATE "/DELAYLOAD:dxil.dll")
+    target_link_options(rt64 PRIVATE "/DELAYLOAD:SDL2.dll")
+
     target_link_libraries(rt64
         delayimp.lib
         D3D12
