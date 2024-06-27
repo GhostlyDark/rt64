@@ -85,6 +85,7 @@ DLLEXPORT int CALL InitiateGFX(PluginGraphicsInfo graphicsInfo) {
 
     // Store core information in application.
     RT64::Application::Core appCore;
+    uint32_t threadId = 0;
     appCore.window = {};
 
     switch (RT64::API.apiType) {
@@ -95,6 +96,7 @@ DLLEXPORT int CALL InitiateGFX(PluginGraphicsInfo graphicsInfo) {
     case RT64::APIType::Project64:
         RT64::InitiateGFXCore<Project64GraphicsInfo>(appCore, graphicsInfo.project64);
         appCore.window = RT64::RenderWindow(graphicsInfo.project64.hWnd);
+        threadId = GetCurrentThreadId();
         break;
 #endif
     default:
@@ -103,7 +105,7 @@ DLLEXPORT int CALL InitiateGFX(PluginGraphicsInfo graphicsInfo) {
 
     // Make new application with core information and set it up.
     RT64::API.app = std::make_unique<RT64::Application>(appCore, RT64::ApplicationConfiguration());
-    return (RT64::API.app->setup(0) == RT64::Application::SetupResult::Success);
+    return (RT64::API.app->setup(threadId) == RT64::Application::SetupResult::Success);
 }
 
 DLLEXPORT void CALL ResizeVideoOutput(int width, int height) {
