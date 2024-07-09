@@ -50,11 +50,16 @@ namespace RT64 {
     typedef std::list<AccessPair> AccessList;
 
     struct ReplacementMap {
+        struct AutoPath {
+            std::string resolvedPath;
+            uint32_t databaseIndex;
+        };
+
         ReplacementDatabase db;
         std::vector<Texture *> loadedTextures;
         std::vector<Texture *> evictedTextures;
         std::unordered_map<uint64_t, uint32_t> pathHashToLoadMap;
-        std::unordered_map<uint64_t, std::string> autoPathMap;
+        std::unordered_map<uint64_t, AutoPath> autoPathMap;
         std::filesystem::path directoryPath;
 
         ReplacementMap();
@@ -64,9 +69,9 @@ namespace RT64 {
         bool saveDatabase(std::ostream &stream);
         void resolveAutoPaths();
         void removeUnusedEntriesFromDatabase();
-        std::string getRelativePathFromHash(uint64_t tmemHash) const;
+        bool getInformationFromHash(uint64_t tmemHash, std::string &relativePath, uint32_t &databaseIndex) const;
+        void addLoadedTexture(Texture *texture, const std::string &relativePath);
         Texture *getFromRelativePath(const std::string &relativePath) const;
-        Texture *loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         uint64_t hashFromRelativePath(const std::string &relativePath) const;
     };
 
@@ -96,6 +101,7 @@ namespace RT64 {
         std::vector<AccessList::iterator> listIterators;
         std::vector<Texture *> evictedTextures;
         ReplacementMap replacementMap;
+        std::mutex replacementMapMutex;
         bool replacementMapEnabled;
 
         TextureMap();
@@ -112,6 +118,38 @@ namespace RT64 {
     };
 
     struct TextureCache {
+        struct StreamDescription {
+            uint64_t hash = 0;
+            std::filesystem::path filePath;
+            std::string relativePath;
+            uint32_t minMipWidth = 0;
+            uint32_t minMipHeight = 0;
+
+            StreamDescription() {
+                // Default constructor.
+            }
+
+            StreamDescription(uint64_t hash, const std::filesystem::path &filePath, const std::string &relativePath, uint32_t minMipWidth, uint32_t minMipHeight) {
+                this->hash = hash;
+                this->filePath = filePath;
+                this->relativePath = relativePath;
+                this->minMipWidth = minMipWidth;
+                this->minMipHeight = minMipHeight;
+            }
+        };
+
+        struct StreamThread {
+            std::unique_ptr<RenderWorker> worker;
+            TextureCache *textureCache = nullptr;
+            std::unique_ptr<std::thread> thread;
+            std::atomic<bool> threadRunning;
+            std::unique_ptr<RenderBuffer> uploadResource;
+
+            StreamThread(TextureCache *textureCache);
+            ~StreamThread();
+            void loop();
+        };
+
         const ShaderLibrary *shaderLibrary;
         std::vector<TextureUpload> uploadQueue;
         std::vector<ReplacementCheck> replacementQueue;
@@ -123,14 +161,21 @@ namespace RT64 {
         std::condition_variable uploadQueueFinished;
         std::thread *uploadThread;
         std::atomic<bool> uploadThreadRunning;
+        std::queue<StreamDescription> streamDescQueue;
+        std::mutex streamDescQueueMutex;
+        std::condition_variable streamDescQueueChanged;
+        std::list<std::unique_ptr<StreamThread>> streamThreads;
+        std::queue<HashTexturePair> streamedTextureQueue;
+        std::mutex streamedTextureQueueMutex;
         TextureMap textureMap;
         std::mutex textureMapMutex;
         RenderWorker *worker;
-        std::unique_ptr<RenderPool> threadResourcePool;
+        std::unique_ptr<RenderPool> uploadResourcePool;
+        std::mutex uploadResourcePoolMutex;
         uint32_t lockCounter;
         bool developerMode;
 
-        TextureCache(RenderWorker *worker, const ShaderLibrary *shaderLibrary, bool developerMode);
+        TextureCache(RenderWorker *worker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode);
         ~TextureCache();
         void uploadThreadLoop();
         void queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile, bool decodeTMEM);
@@ -145,8 +190,9 @@ namespace RT64 {
         void incrementLock();
         void decrementLock();
         Texture *getTexture(uint32_t textureIndex);
-        static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr);
-        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
+        static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr);
+        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         static bool loadBytesFromPath(const std::filesystem::path &path, std::vector<uint8_t> &bytes);
+        static Texture *loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
     };
 };

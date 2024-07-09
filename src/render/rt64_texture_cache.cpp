@@ -76,7 +76,7 @@ namespace RT64 {
         auto toLower = [](std::string str) {
             std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
             return str;
-        };
+            };
 
         // Scan all possible candidates on the filesystem first.
         std::unordered_map<std::string, std::string> ricePathMap;
@@ -103,16 +103,19 @@ namespace RT64 {
         autoPathMap.clear();
 
         // Look for possible matches of all current replacements that don't have a path assigned.
+        uint32_t textureIndex = 0;
         for (const ReplacementTexture &texture : db.textures) {
             if (texture.path.empty()) {
                 if (db.config.autoPath == ReplacementAutoPath::Rice) {
                     auto it = ricePathMap.find(texture.hashes.rice);
                     if (it != ricePathMap.end()) {
                         uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
-                        autoPathMap[rt64] = it->second;
+                        autoPathMap[rt64] = { it->second, textureIndex };
                     }
                 }
             }
+
+            textureIndex++;
         }
     }
 
@@ -126,7 +129,7 @@ namespace RT64 {
                     continue;
                 }
 
-                if (pathIt->second.empty()) {
+                if (pathIt->second.resolvedPath.empty()) {
                     continue;
                 }
             }
@@ -138,18 +141,28 @@ namespace RT64 {
         db.buildHashMaps();
     }
 
-    std::string ReplacementMap::getRelativePathFromHash(uint64_t tmemHash) const {
+    bool ReplacementMap::getInformationFromHash(uint64_t tmemHash, std::string &relativePath, uint32_t &databaseIndex) const {
         auto pathIt = autoPathMap.find(tmemHash);
         if (pathIt != autoPathMap.end()) {
-            return pathIt->second;
+            relativePath = pathIt->second.resolvedPath;
+            databaseIndex = pathIt->second.databaseIndex;
+            return true;
         }
 
         auto replaceIt = db.tmemHashToReplaceMap.find(tmemHash);
         if (replaceIt != db.tmemHashToReplaceMap.end()) {
-            return db.textures[replaceIt->second].path;
+            relativePath = db.textures[replaceIt->second].path;
+            databaseIndex = replaceIt->second;
+            return true;
         }
 
-        return std::string();
+        return false;
+    }
+
+    void ReplacementMap::addLoadedTexture(Texture *texture, const std::string &relativePath) {
+        const uint64_t pathHash = hashFromRelativePath(relativePath);
+        pathHashToLoadMap[pathHash] = uint32_t(loadedTextures.size());
+        loadedTextures.emplace_back(texture);
     }
 
     Texture *ReplacementMap::getFromRelativePath(const std::string &relativePath) const {
@@ -159,50 +172,6 @@ namespace RT64 {
             return loadedTextures[it->second];
         }
         else {
-            return nullptr;
-        }
-    }
-
-    Texture *ReplacementMap::loadFromBytes(RenderWorker *worker, uint64_t hash, const std::string &relativePath, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool, uint32_t minMipWidth, uint32_t minMipHeight) {
-        uint64_t pathHash = hashFromRelativePath(relativePath);
-        if (pathHashToLoadMap.find(pathHash) != pathHashToLoadMap.end()) {
-            assert(false && "Can't add a replacement texture with an existing hash.");
-            return nullptr;
-        }
-
-        const uint32_t PNG_MAGIC = 0x474E5089;
-        Texture *replacementTexture = new Texture();
-        uint32_t magicNumber = *reinterpret_cast<const uint32_t *>(fileBytes.data());
-        bool loadedTexture = false;
-        switch (magicNumber) {
-        case ddspp::DDS_MAGIC:
-            loadedTexture = TextureCache::setDDS(replacementTexture, worker, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool, minMipWidth, minMipHeight);
-            break;
-        case PNG_MAGIC: {
-            int width, height;
-            stbi_uc *data = stbi_load_from_memory(fileBytes.data(), fileBytes.size(), &width, &height, nullptr, 4);
-            if (data != nullptr) {
-                uint32_t rowPitch = uint32_t(width) * 4;
-                size_t byteCount = uint32_t(height) * rowPitch;
-                TextureCache::setRGBA32(replacementTexture, worker, data, byteCount, uint32_t(width), uint32_t(height), rowPitch, dstUploadResource, resourcePool);
-                stbi_image_free(data);
-                loadedTexture = true;
-            }
-
-            break;
-        }
-        default:
-            // Unknown format.
-            break;
-        }
-
-        if (loadedTexture) {
-            pathHashToLoadMap[pathHash] = uint32_t(loadedTextures.size());
-            loadedTextures.emplace_back(replacementTexture);
-            return replacementTexture;
-        }
-        else {
-            delete replacementTexture;
             return nullptr;
         }
     }
@@ -368,9 +337,82 @@ namespace RT64 {
         return textures.size();
     }
 
+    // TextureCache::StreamThread
+
+    TextureCache::StreamThread::StreamThread(TextureCache *textureCache) {
+        assert(textureCache != nullptr);
+
+        this->textureCache = textureCache;
+
+        worker = std::make_unique<RenderWorker>(textureCache->worker->device, "RT64 Stream Worker", RenderCommandListType::COMPUTE);
+        thread = std::make_unique<std::thread>(&StreamThread::loop, this);
+        threadRunning = false;
+    }
+
+    TextureCache::StreamThread::~StreamThread() {
+        threadRunning = false;
+        textureCache->streamDescQueueChanged.notify_all();
+        thread->join();
+        thread.reset(nullptr);
+    }
+
+    void TextureCache::StreamThread::loop() {
+        Thread::setCurrentThreadName("RT64 Stream");
+
+        // Texture streaming threads should have a priority somewhere inbetween the main threads and the shader compilation threads.
+        Thread::setCurrentThreadPriority(Thread::Priority::Low);
+
+        threadRunning = true;
+
+        std::vector<uint8_t> replacementBytes;
+        while (threadRunning) {
+            StreamDescription streamDesc;
+
+            // Check the top of the queue or wait if it's empty.
+            {
+                std::unique_lock queueLock(textureCache->streamDescQueueMutex);
+                textureCache->streamDescQueueChanged.wait(queueLock, [this]() {
+                    return !threadRunning || !textureCache->streamDescQueue.empty();
+                });
+
+                if (!textureCache->streamDescQueue.empty()) {
+                    streamDesc = textureCache->streamDescQueue.front();
+                    textureCache->streamDescQueue.pop();
+                }
+            }
+
+            if (!streamDesc.filePath.empty()) {
+                HashTexturePair hashTexturePair;
+                hashTexturePair.hash = streamDesc.hash;
+
+                // Check again if the texture file hasn't been loaded into the replacement map yet.
+                {
+                    std::unique_lock replacementMapLock(textureCache->textureMap.replacementMapMutex);
+                    hashTexturePair.texture = textureCache->textureMap.replacementMap.getFromRelativePath(streamDesc.relativePath);
+                }
+                
+                // Load the bytes from the file and decode the texture.
+                if ((hashTexturePair.texture == nullptr) && TextureCache::loadBytesFromPath(streamDesc.filePath, replacementBytes)) {
+                    RenderWorkerExecution execution(worker.get());
+                    hashTexturePair.texture = TextureCache::loadTextureFromBytes(worker.get(), replacementBytes, uploadResource, nullptr, nullptr, streamDesc.minMipWidth, streamDesc.minMipHeight);
+                    if (hashTexturePair.texture != nullptr) {
+                        std::unique_lock replacementMapLock(textureCache->textureMap.replacementMapMutex);
+                        textureCache->textureMap.replacementMap.addLoadedTexture(hashTexturePair.texture, streamDesc.relativePath);
+                    }
+                }
+
+                // Add the texture to be added back in the next time the texture cache is unlocked.
+                if (hashTexturePair.texture != nullptr) {
+                    std::unique_lock streamedLock(textureCache->streamedTextureQueueMutex);
+                    textureCache->streamedTextureQueue.push(hashTexturePair);
+                }
+            }
+        }
+    }
+
     // TextureCache
 
-    TextureCache::TextureCache(RenderWorker *worker, const ShaderLibrary *shaderLibrary, bool developerMode) {
+    TextureCache::TextureCache(RenderWorker *worker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode) {
         assert(worker != nullptr);
 
         this->worker = worker;
@@ -384,7 +426,11 @@ namespace RT64 {
         poolDesc.heapType = RenderHeapType::UPLOAD;
         poolDesc.useLinearAlgorithm = true;
         poolDesc.allowOnlyBuffers = true;
-        threadResourcePool = worker->device->createPool(poolDesc);
+        uploadResourcePool = worker->device->createPool(poolDesc);
+
+        for (uint32_t i = 0; i < threadCount; i++) {
+            streamThreads.push_back(std::make_unique<StreamThread>(this));
+        }
     }
 
     TextureCache::~TextureCache() {
@@ -398,10 +444,10 @@ namespace RT64 {
         descriptorSets.clear();
         tmemUploadResources.clear();
         replacementUploadResources.clear();
-        threadResourcePool.reset(nullptr);
+        uploadResourcePool.reset(nullptr);
     }
     
-    void TextureCache::setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool) {
+    void TextureCache::setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex) {
         assert(dstTexture != nullptr);
         assert(worker != nullptr);
         assert(bytes != nullptr);
@@ -420,6 +466,8 @@ namespace RT64 {
         dstTexture->texture = worker->device->createTexture(RenderTextureDesc::Texture2D(width, height, 1, dstTexture->format));
 
         if (uploadResourcePool != nullptr) {
+            assert(uploadResourcePoolMutex != nullptr);
+            std::unique_lock queueLock(*uploadResourcePoolMutex);
             dstUploadResource = uploadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(rowByteWidth * height));
         }
         else {
@@ -617,7 +665,7 @@ namespace RT64 {
         }
     }
 
-    bool TextureCache::setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, uint32_t minMipWidth, uint32_t minMipHeight) {
+    bool TextureCache::setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex, uint32_t minMipWidth, uint32_t minMipHeight) {
         assert(dstTexture != nullptr);
         assert(worker != nullptr);
         assert(bytes != nullptr);
@@ -672,6 +720,8 @@ namespace RT64 {
 
         const size_t uploadBufferSize = imageDataSize + imageDataPadding;
         if (uploadResourcePool != nullptr) {
+            assert(uploadResourcePoolMutex != nullptr);
+            std::unique_lock queueLock(*uploadResourcePoolMutex);
             dstUploadResource = uploadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(uploadBufferSize));
         }
         else {
@@ -720,6 +770,42 @@ namespace RT64 {
         }
     }
 
+    Texture *TextureCache::loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool, std::mutex *uploadResourcePoolMutex, uint32_t minMipWidth, uint32_t minMipHeight) {
+        const uint32_t PNG_MAGIC = 0x474E5089;
+        Texture *replacementTexture = new Texture();
+        uint32_t magicNumber = *reinterpret_cast<const uint32_t *>(fileBytes.data());
+        bool loadedTexture = false;
+        switch (magicNumber) {
+        case ddspp::DDS_MAGIC:
+            loadedTexture = TextureCache::setDDS(replacementTexture, worker, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool, uploadResourcePoolMutex, minMipWidth, minMipHeight);
+            break;
+        case PNG_MAGIC: {
+            int width, height;
+            stbi_uc *data = stbi_load_from_memory(fileBytes.data(), fileBytes.size(), &width, &height, nullptr, 4);
+            if (data != nullptr) {
+                uint32_t rowPitch = uint32_t(width) * 4;
+                size_t byteCount = uint32_t(height) * rowPitch;
+                TextureCache::setRGBA32(replacementTexture, worker, data, byteCount, uint32_t(width), uint32_t(height), rowPitch, dstUploadResource, resourcePool);
+                stbi_image_free(data);
+                loadedTexture = true;
+            }
+
+            break;
+        }
+        default:
+            // Unknown format.
+            break;
+        }
+
+        if (loadedTexture) {
+            return replacementTexture;
+        }
+        else {
+            delete replacementTexture;
+            return nullptr;
+        }
+    }
+
     void TextureCache::uploadThreadLoop() {
         Thread::setCurrentThreadName("RT64 Texture");
 
@@ -734,14 +820,13 @@ namespace RT64 {
         std::vector<RenderTextureBarrier> beforeDecodeBarriers;
         std::vector<RenderTextureBarrier> afterDecodeBarriers;
         std::vector<uint8_t> replacementBytes;
-        bool replacementsUploaded = false;
 
         while (uploadThreadRunning) {
             replacementQueueCopy.clear();
 
             // Check the top of the queue or wait if it's empty.
             {
-                std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
+                std::unique_lock queueLock(uploadQueueMutex);
                 uploadQueueChanged.wait(queueLock, [this]() {
                     return !uploadThreadRunning || !uploadQueue.empty() || !replacementQueue.empty();
                 });
@@ -760,8 +845,11 @@ namespace RT64 {
                 // Create new upload buffers and descriptor heaps to fill out the required size.
                 const size_t queueSize = queueCopy.size();
                 const uint64_t TMEMSize = 0x1000;
-                for (size_t i = tmemUploadResources.size(); i < queueSize; i++) {
-                    tmemUploadResources.emplace_back(threadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(TMEMSize)));
+                {
+                    std::unique_lock queueLock(uploadResourcePoolMutex);
+                    for (size_t i = tmemUploadResources.size(); i < queueSize; i++) {
+                        tmemUploadResources.emplace_back(uploadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(TMEMSize)));
+                    }
                 }
 
                 for (size_t i = descriptorSets.size(); i < queueSize; i++) {
@@ -822,7 +910,7 @@ namespace RT64 {
                             beforeDecodeBarriers.emplace_back(RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::GENERAL));
                         }
                     }
-                    
+
                     worker->commandList->barriers(RenderBarrierStage::COMPUTE, beforeDecodeBarriers);
 
                     const ShaderRecord &textureDecode = shaderLibrary->textureDecode;
@@ -856,7 +944,7 @@ namespace RT64 {
 
                             afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i].texture->texture.get(), RenderTextureLayout::SHADER_READ));
                         }
-                        
+
                         if ((upload.width > 0) && (upload.height > 0)) {
                             // If the database uses an older hash version, we hash TMEM again with the version corresponding to the database.
                             uint32_t databaseVersion = textureMap.replacementMap.db.config.hashVersion;
@@ -873,16 +961,41 @@ namespace RT64 {
                     if (!afterDecodeBarriers.empty()) {
                         worker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
                     }
-                    
+
                     for (const ReplacementCheck &replacementCheck : replacementQueueCopy) {
-                        std::string relativePath = textureMap.replacementMap.getRelativePathFromHash(replacementCheck.databaseHash);
-                        if (!relativePath.empty()) {
+                        std::string relativePath;
+                        uint32_t databaseIndex = 0;
+                        if (textureMap.replacementMap.getInformationFromHash(replacementCheck.databaseHash, relativePath, databaseIndex)) {
                             std::filesystem::path filePath = textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath);
-                            Texture *replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
-                            if ((replacementTexture == nullptr) && TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
-                                replacementUploadResources.emplace_back();
-                                replacementTexture = textureMap.replacementMap.loadFromBytes(worker, replacementCheck.databaseHash, relativePath, replacementBytes, replacementUploadResources.back(), nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
-                                replacementsUploaded = true;
+                            Texture *replacementTexture = nullptr;
+                            {
+                                std::unique_lock replacementMapLock(textureMap.replacementMapMutex);
+                                replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
+                            }
+
+                            // A replacement file is available.
+                            if ((replacementTexture == nullptr) && std::filesystem::exists(filePath)) {
+                                const ReplacementTexture &databaseTexture = textureMap.replacementMap.db.textures[databaseIndex];
+
+                                // Queue the texture for being loaded from a texture cache streaming thread.
+                                if ((databaseTexture.load == ReplacementLoad::Stream) || (databaseTexture.load == ReplacementLoad::Async)) {
+                                    {
+                                        std::unique_lock queueLock(streamDescQueueMutex);
+                                        streamDescQueue.push(StreamDescription(replacementCheck.textureHash, filePath, relativePath, replacementCheck.minMipWidth, replacementCheck.minMipHeight));
+                                    }
+
+                                    streamDescQueueChanged.notify_all();
+                                }
+                                // Load the texture directly on this thread.
+                                else if (TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
+                                    replacementUploadResources.emplace_back();
+                                    replacementTexture = TextureCache::loadTextureFromBytes(worker, replacementBytes, replacementUploadResources.back(), nullptr, nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
+
+                                    {
+                                        std::unique_lock replacementMapLock(textureMap.replacementMapMutex);
+                                        textureMap.replacementMap.addLoadedTexture(replacementTexture, relativePath);
+                                    }
+                                }
                             }
 
                             if (replacementTexture != nullptr) {
@@ -892,14 +1005,11 @@ namespace RT64 {
                     }
                 }
 
-                if (replacementsUploaded) {
-                    replacementUploadResources.clear();
-                    replacementsUploaded = false;
-                }
+                replacementUploadResources.clear();
 
                 // Add all the textures to the map once they're ready.
                 {
-                    const std::unique_lock<std::mutex> lock(textureMapMutex);
+                    std::unique_lock lock(textureMapMutex);
                     for (const HashTexturePair &pair : texturesUploaded) {
                         textureMap.add(pair.hash, pair.texture->creationFrame, pair.texture);
                     }
@@ -911,7 +1021,7 @@ namespace RT64 {
 
                 // Make the new queue the remaining subsection of the upload queue that wasn't processed in this batch.
                 {
-                    const std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
+                    std::unique_lock queueLock(uploadQueueMutex);
                     newQueue = std::vector<TextureUpload>(uploadQueue.begin() + queueSize, uploadQueue.end());
                     uploadQueue = std::move(newQueue);
                 }
@@ -937,7 +1047,7 @@ namespace RT64 {
         newUpload.decodeTMEM = decodeTMEM;
 
         {
-            const std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
+            std::unique_lock queueLock(uploadQueueMutex);
             uploadQueue.emplace_back(newUpload);
         }
 
@@ -945,14 +1055,14 @@ namespace RT64 {
     }
 
     void TextureCache::waitForGPUUploads() {
-        std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
+        std::unique_lock queueLock(uploadQueueMutex);
         uploadQueueFinished.wait(queueLock, [this]() {
             return uploadQueue.empty();
         });
     }
 
     bool TextureCache::useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex, interop::float2 &textureScale, bool &textureReplaced, bool &hasMipmaps) {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         return textureMap.use(hash, submissionFrame, textureIndex, textureScale, textureReplaced, hasMipmaps);
     }
 
@@ -966,7 +1076,7 @@ namespace RT64 {
     bool TextureCache::addReplacement(uint64_t hash, const std::string &relativePath) {
         // TODO: The case where a replacement is reloaded needs to be handled correctly. Multiple hashes can point to the same path. All hashes pointing to that path must be reloaded correctly.
 
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         std::vector<uint8_t> replacementBytes;
         if (!TextureCache::loadBytesFromPath(textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath), replacementBytes)) {
             return false;
@@ -977,11 +1087,15 @@ namespace RT64 {
         Texture *newTexture = nullptr;
         {
             RenderWorkerExecution execution(worker);
-            newTexture = textureMap.replacementMap.loadFromBytes(worker, hash, relativePath, replacementBytes, dstUploadBuffer);
+            newTexture = TextureCache::loadTextureFromBytes(worker, replacementBytes, dstUploadBuffer);
         }
 
-        if (newTexture == nullptr) {
-            delete newTexture;
+        // Add the loaded texture to the replacement map.
+        if (newTexture != nullptr) {
+            std::unique_lock replacementMapLock(textureMap.replacementMapMutex);
+            textureMap.replacementMap.addLoadedTexture(newTexture, relativePath);
+        }
+        else {
             return false;
         }
 
@@ -992,17 +1106,12 @@ namespace RT64 {
         textureMap.replacementMap.db.addReplacement(replacement);
 
         // Replace the texture in the cache.
-        if (newTexture != nullptr) {
-            textureMap.replace(hash, newTexture);
-            return true;
-        }
-        else {
-            return false;
-        }
+        textureMap.replace(hash, newTexture);
+        return true;
     }
 
     bool TextureCache::loadReplacementDirectory(const std::filesystem::path &directoryPath) {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         textureMap.clearReplacements();
         textureMap.replacementMap.clear();
         textureMap.replacementMap.directoryPath = directoryPath;
@@ -1019,7 +1128,7 @@ namespace RT64 {
 
         // Queue all currently loaded hashes to detect replacements with.
         {
-            const std::unique_lock<std::mutex> queueLock(uploadQueueMutex);
+            std::unique_lock queueLock(uploadQueueMutex);
             replacementQueue.clear();
             for (size_t i = 0; i < textureMap.hashes.size(); i++) {
                 if (textureMap.hashes[i] != 0) {
@@ -1041,7 +1150,7 @@ namespace RT64 {
     }
 
     bool TextureCache::saveReplacementDatabase() {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         if (textureMap.replacementMap.directoryPath.empty()) {
             return false;
         }
@@ -1083,7 +1192,7 @@ namespace RT64 {
     }
 
     void TextureCache::removeUnusedEntriesFromDatabase() {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         if (textureMap.replacementMap.directoryPath.empty()) {
             return;
         }
@@ -1092,22 +1201,22 @@ namespace RT64 {
     }
 
     Texture *TextureCache::getTexture(uint32_t textureIndex) {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         return textureMap.get(textureIndex);
     }
 
     bool TextureCache::evict(uint64_t submissionFrame, std::vector<uint64_t> &evictedHashes) {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         return textureMap.evict(submissionFrame, evictedHashes);
     }
 
     void TextureCache::incrementLock() {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         lockCounter++;
     }
 
     void TextureCache::decrementLock() {
-        const std::unique_lock<std::mutex> lock(textureMapMutex);
+        std::unique_lock lock(textureMapMutex);
         lockCounter--;
 
         if (lockCounter == 0) {
@@ -1124,6 +1233,17 @@ namespace RT64 {
             }
 
             textureMap.replacementMap.evictedTextures.clear();
+
+            // Add any replacements loaded by the streaming threads.
+            {
+                std::unique_lock streamedLock(streamedTextureQueueMutex);
+                HashTexturePair hashTexturePair;
+                while (!streamedTextureQueue.empty()) {
+                    hashTexturePair = streamedTextureQueue.front();
+                    textureMap.replace(hashTexturePair.hash, hashTexturePair.texture);
+                    streamedTextureQueue.pop();
+                }
+            }
         }
     }
 };

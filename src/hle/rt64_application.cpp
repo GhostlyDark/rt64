@@ -193,7 +193,7 @@ namespace RT64 {
         workloadVelocityUploader = std::make_unique<BufferUploader>(device.get());
         workloadTilesUploader = std::make_unique<BufferUploader>(device.get());
         framebufferGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Framebuffer Graphics", RenderCommandListType::DIRECT);
-        textureComputeWorker = std::make_unique<RenderWorker>(device.get(), "Texture Compute", RenderCommandListType::DIRECT); // TODO: Change this back after DDS decoder is made its own worker.
+        textureComputeWorker = std::make_unique<RenderWorker>(device.get(), "Texture Compute", RenderCommandListType::COMPUTE);
         workloadGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Workload Graphics", RenderCommandListType::DIRECT);
         presentGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Present Graphics", RenderCommandListType::DIRECT);
         swapChain = presentGraphicsWorker->commandQueue->createSwapChain(appWindow->windowHandle, 2, RenderFormat::B8G8R8A8_UNORM);
@@ -239,7 +239,8 @@ namespace RT64 {
 #   endif
 
         // Create the texture cache.
-        textureCache = std::make_unique<TextureCache>(textureComputeWorker.get(), shaderLibrary.get(), userConfig.developerMode);
+        const uint32_t textureCacheThreads = std::max(threadsAvailable / 4U, 1U);
+        textureCache = std::make_unique<TextureCache>(textureComputeWorker.get(), textureCacheThreads, shaderLibrary.get(), userConfig.developerMode);
 
 #   if RT_ENABLED
         // Create the blue noise texture, upload it and wait for it to finish.
