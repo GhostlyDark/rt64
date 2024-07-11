@@ -740,7 +740,6 @@ namespace RT64 {
         }
 
         dstUploadResource->unmap();
-        worker->commandList->barriers(RenderBarrierStage::COPY, RenderBufferBarrier(dstUploadResource.get(), RenderBufferAccess::READ));
         worker->commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
 
         for (uint32_t mip = 0; mip < desc.mipLevels; mip++) {
