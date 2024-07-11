@@ -277,20 +277,16 @@ namespace RT64 {
                     // Estimate sampling width and height based on masks ands tiles, whichever are smaller.
                     const bool clampS = (tile.masks == 0) || (tile.cms & G_TX_CLAMP);
                     const bool clampT = (tile.maskt == 0) || (tile.cmt & G_TX_CLAMP);
-                    const int32_t tileWidth = clampS ? std::max((tile.lrs - tile.uls + 4) / 4, 0) : 0xFFFF;
-                    const int32_t tileHeight = clampT ? std::max((tile.lrt - tile.ult + 4) / 4, 0) : 0xFFFF;
+                    const int32_t tileWidth = clampS ? std::max((tile.lrs - tile.uls + 4) / 4, 1) : 0xFFFF;
+                    const int32_t tileHeight = clampT ? std::max((tile.lrt - tile.ult + 4) / 4, 1) : 0xFFFF;
                     const int32_t maskWidth = (tile.masks > 0) ? static_cast<int32_t>(1 << tile.masks) : 0xFFFF;
                     const int32_t maskHeight = (tile.maskt > 0) ? static_cast<int32_t>(1 << tile.maskt) : 0xFFFF;
                     dstCallTile.sampleWidth = static_cast<uint16_t>(std::min(tileWidth, maskWidth));
                     dstCallTile.sampleHeight = static_cast<uint16_t>(std::min(tileHeight, maskHeight));
 
                     // Check if we need to use raw TMEM decoding because the tile can sample more bytes than TMEM actually allows.
-                    if ((dstCallTile.sampleWidth > 0) && (dstCallTile.sampleHeight > 0)) {
-                        dstCallTile.rawTMEM = TextureManager::requiresRawTMEM(tile, dstCallTile.sampleWidth, dstCallTile.sampleHeight);
-                    }
-                    else {
-                        dstCallTile.rawTMEM = false;
-                    }
+                    assert((dstCallTile.sampleWidth > 0) && (dstCallTile.sampleHeight > 0) && "Sample size calculation can only result in non-zero values.");
+                    dstCallTile.rawTMEM = TextureManager::requiresRawTMEM(tile, dstCallTile.sampleWidth, dstCallTile.sampleHeight);
                     
                     auto &dstRDPTile = drawData.rdpTiles[drawCall.tileIndex + t];
                     dstRDPTile.fmt = tile.fmt;
@@ -725,7 +721,13 @@ namespace RT64 {
         
         // Copy the current state's extended parameters into the workload.
         workload.extended.ditherNoiseStrength = extended.ditherNoiseStrength;
-        
+
+        auto emitTileWarning = [&](CommandWarning warning, size_t tileIndex) {
+            warning.indexType = CommandWarning::IndexType::TileIndex;
+            warning.tile.index = uint32_t(tileIndex);
+            workload.commandWarnings.emplace_back(warning);
+        };
+
         // Validate all tile copies to be used during the rendering.
         const bool extendedRenderToRAMSet = (extended.renderToRAM < UINT8_MAX);
         const bool renderToRDRAM = extendedRenderToRAMSet ? (extended.renderToRAM != 0) : ext.emulatorConfig->framebuffer.renderToRAM;
@@ -734,7 +736,29 @@ namespace RT64 {
         const size_t callTileCount = workload.drawData.callTiles.size();
         for (size_t t = 0; t < callTileCount; t++) {
             DrawCallTile &callTile = workload.drawData.callTiles[t];
-            if (!callTile.valid || (!callTile.tileCopyUsed && !callTile.rawTMEM)) {
+            if (!callTile.valid) {
+                continue;
+            }
+
+            if (warningsEnabled) {
+                const auto &loadTile = callTile.loadTile;
+
+                // Using horizontal clamp but coordinates are in the wrong order.
+                if (((loadTile.cms & G_TX_CLAMP) || (loadTile.masks == 0)) && (loadTile.uls > loadTile.lrs)) {
+                    emitTileWarning(CommandWarning::format("Texture tile #%u: The tile uses horizontal clamp, but the left coordinate "
+                        "is a higher value than the right coordinate. Only one column of pixels can be used.", t), t);
+                }
+
+                // Using vertical clamp but coordinates are in the wrong order.
+                if (((loadTile.cmt & G_TX_CLAMP) || (loadTile.maskt == 0)) && (loadTile.ult > loadTile.lrt)) {
+                    emitTileWarning(CommandWarning::format("Texture tile #%u: The tile uses vertical clamp, but the top coordinate "
+                        "is a higher value than the bottom coordinate. Only one row of pixels can be used.", t), t);
+                }
+
+            }
+
+            // The rest of the validation doesn't apply to tiles that aren't GPU copies or sampling TMEM directly.
+            if (!callTile.tileCopyUsed && !callTile.rawTMEM) {
                 continue;
             }
 
@@ -807,7 +831,7 @@ namespace RT64 {
                     callTile.rawTMEM = false;
                 }
             }
-            
+
             // Determine if the use of raw TMEM is still required with the texture coordinates that were found.
             if (callTile.rawTMEM) {
                 // FIXME: A safety check to only do this on textures that were determined to be big was added until the
@@ -820,14 +844,10 @@ namespace RT64 {
                 }
             }
 
-            // Emit a warning for any tiles using raw TMEM.
-            if (callTile.rawTMEM && warningsEnabled) {
-                CommandWarning warning = CommandWarning::format("Texture tile #%u: The tile can sample more bytes than what TMEM can hold "
-                    "due to using a big mask or big clamp coordinates. Unable to provide a fast path for texture sampling.", t);
-
-                warning.indexType = CommandWarning::IndexType::TileIndex;
-                warning.tile.index = uint32_t(t);
-                workload.commandWarnings.emplace_back(warning);
+            // Emit warnings for tiles using raw TMEM fallback.
+            if (warningsEnabled && callTile.rawTMEM) {
+                emitTileWarning(CommandWarning::format("Texture tile #%u: The tile can sample more bytes than what TMEM can hold "
+                    "due to using a big mask or big clamp coordinates. Unable to provide a fast path for texture sampling.", t), t);
             }
         }
 

@@ -1035,6 +1035,7 @@ namespace RT64 {
     void TextureCache::queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile, bool decodeTMEM) {
         assert(bytes != nullptr);
         assert(bytesCount > 0);
+        assert(!decodeTMEM || ((width > 0) && (height > 0)));
 
         TextureUpload newUpload;
         newUpload.hash = hash;
