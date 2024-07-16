@@ -70,7 +70,7 @@ namespace RT64 {
         std::vector<ReplacementTexture> textures;
         std::unordered_map<uint64_t, uint32_t> tmemHashToReplaceMap;
 
-        void addReplacement(const ReplacementTexture &texture);
+        uint32_t addReplacement(const ReplacementTexture &texture);
         void fixReplacement(const std::string &hash, const ReplacementTexture &texture);
         ReplacementTexture getReplacement(const std::string &hash) const;
         void buildHashMaps();

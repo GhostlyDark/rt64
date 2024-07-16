@@ -21,6 +21,42 @@ namespace RT64 {
 
     static const interop::float2 IdentityScale = { 1.0f, 1.0f };
     static const std::string ReplacementDatabaseFilename = "rt64.json";
+    static const std::string KnownExtensions[] = { ".dds", ".png" };
+
+    static bool isExtensionKnown(const std::string &extension) {
+        for (uint32_t i = 0; i < std::size(KnownExtensions); i++) {
+            if (extension == KnownExtensions[i]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static bool endsWith(const std::string &str, const std::string &end) {
+        if (str.length() >= end.length()) {
+            return (str.compare(str.length() - end.length(), end.length(), end) == 0);
+        }
+        else {
+            return false;
+        }
+    }
+
+    static std::string toLower(std::string str) {
+        std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
+        return str;
+    };
+
+    static std::string removeKnownExtension(const std::string &path) {
+        const std::string lowerCasePath = toLower(path);
+        for (uint32_t i = 0; i < std::size(KnownExtensions); i++) {
+            if (endsWith(lowerCasePath, KnownExtensions[i])) {
+                return path.substr(0, path.size() - KnownExtensions[i].size());
+            }
+        }
+
+        return path;
+    }
 
     ReplacementMap::ReplacementMap() {
         // Empty constructor.
@@ -72,46 +108,65 @@ namespace RT64 {
         }
     }
 
-    void ReplacementMap::resolveAutoPaths() {
-        auto toLower = [](std::string str) {
-            std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
-            return str;
-            };
-
+    void ReplacementMap::resolvePaths() {
         // Scan all possible candidates on the filesystem first.
-        std::unordered_map<std::string, std::string> ricePathMap;
+        std::unordered_map<std::string, std::string> autoPathMap;
         for (const std::filesystem::directory_entry &entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
             if (entry.is_regular_file()) {
                 std::string fileExtension = toLower(entry.path().extension().u8string());
-                if ((fileExtension != ".dds") && (fileExtension != ".png")) {
+                if (!isExtensionKnown(fileExtension)) {
                     continue;
                 }
 
+                std::string fileName = entry.path().filename().u8string();
                 if (db.config.autoPath == ReplacementAutoPath::Rice) {
-                    std::string fileName = entry.path().filename().u8string();
                     size_t firstHashSymbol = fileName.find_first_of("#");
                     size_t lastUnderscoreSymbol = fileName.find_last_of("_");
                     if ((firstHashSymbol != std::string::npos) && (lastUnderscoreSymbol != std::string::npos) && (lastUnderscoreSymbol > firstHashSymbol)) {
                         std::string riceHash = toLower(fileName.substr(firstHashSymbol + 1, lastUnderscoreSymbol - firstHashSymbol - 1));
-                        ricePathMap[riceHash] = std::filesystem::relative(entry.path(), directoryPath).u8string();
+                        autoPathMap[riceHash] = std::filesystem::relative(entry.path(), directoryPath).u8string();
                     }
+                }
+                else if (db.config.autoPath == ReplacementAutoPath::RT64) {
+                    assert(false && "Unimplemented.");
                 }
             }
         }
 
         // Clear any existing automatic assignments.
-        autoPathMap.clear();
+        resolvedPathMap.clear();
 
-        // Look for possible matches of all current replacements that don't have a path assigned.
+        // Assign paths to all entries in the database.
+        // If the entry already has a relative path, look for textures with extensions that are valid.
+        // If the entry doesn't have a path but uses auto-path logic, then it'll try to resolve the path using that scheme.
         uint32_t textureIndex = 0;
         for (const ReplacementTexture &texture : db.textures) {
-            if (texture.path.empty()) {
-                if (db.config.autoPath == ReplacementAutoPath::Rice) {
-                    auto it = ricePathMap.find(texture.hashes.rice);
-                    if (it != ricePathMap.end()) {
-                        uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
-                        autoPathMap[rt64] = { it->second, textureIndex };
+            if (!texture.path.empty()) {
+                uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
+                std::string relativePathBase = removeKnownExtension(texture.path);
+                for (uint32_t i = 0; i < std::size(KnownExtensions); i++) {
+                    const std::string relativePathKnown = relativePathBase + KnownExtensions[i];
+                    if (std::filesystem::exists(directoryPath / std::filesystem::u8path(relativePathKnown))) {
+                        resolvedPathMap[rt64] = { relativePathKnown, textureIndex };
+                        break;
                     }
+                }
+            }
+            else {
+                // Assign the correct hash as the search string.
+                std::string searchString;
+                if (db.config.autoPath == ReplacementAutoPath::Rice) {
+                    searchString = texture.hashes.rice;
+                }
+                else if (db.config.autoPath == ReplacementAutoPath::RT64) {
+                    searchString = texture.hashes.rt64;
+                }
+
+                // Find in the auto path map the entry.
+                auto it = autoPathMap.find(searchString);
+                if (it != autoPathMap.end()) {
+                    uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
+                    resolvedPathMap[rt64] = { it->second, textureIndex };
                 }
             }
 
@@ -124,12 +179,12 @@ namespace RT64 {
         for (const ReplacementTexture &texture : db.textures) {
             if (texture.path.empty()) {
                 uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
-                auto pathIt = autoPathMap.find(rt64);
-                if (pathIt == autoPathMap.end()) {
+                auto pathIt = resolvedPathMap.find(rt64);
+                if (pathIt == resolvedPathMap.end()) {
                     continue;
                 }
 
-                if (pathIt->second.resolvedPath.empty()) {
+                if (pathIt->second.relativePath.empty()) {
                     continue;
                 }
             }
@@ -142,17 +197,10 @@ namespace RT64 {
     }
 
     bool ReplacementMap::getInformationFromHash(uint64_t tmemHash, std::string &relativePath, uint32_t &databaseIndex) const {
-        auto pathIt = autoPathMap.find(tmemHash);
-        if (pathIt != autoPathMap.end()) {
-            relativePath = pathIt->second.resolvedPath;
+        auto pathIt = resolvedPathMap.find(tmemHash);
+        if (pathIt != resolvedPathMap.end()) {
+            relativePath = pathIt->second.relativePath;
             databaseIndex = pathIt->second.databaseIndex;
-            return true;
-        }
-
-        auto replaceIt = db.tmemHashToReplaceMap.find(tmemHash);
-        if (replaceIt != db.tmemHashToReplaceMap.end()) {
-            relativePath = db.textures[replaceIt->second].path;
-            databaseIndex = replaceIt->second;
             return true;
         }
 
@@ -973,7 +1021,7 @@ namespace RT64 {
                             }
 
                             // A replacement file is available.
-                            if ((replacementTexture == nullptr) && std::filesystem::exists(filePath)) {
+                            if (replacementTexture == nullptr) {
                                 const ReplacementTexture &databaseTexture = textureMap.replacementMap.db.textures[databaseIndex];
 
                                 // Queue the texture for being loaded from a texture cache streaming thread.
@@ -1099,11 +1147,14 @@ namespace RT64 {
             return false;
         }
 
-        // Store replacement in the texture pack configuration.
+        // Store replacement in the replacement database.
         ReplacementTexture replacement;
         replacement.hashes.rt64 = ReplacementDatabase::hashToString(hash);
-        replacement.path = relativePath;
-        textureMap.replacementMap.db.addReplacement(replacement);
+        replacement.path = removeKnownExtension(relativePath);
+
+        // Add the replacement's index to the resolved path map as well.
+        uint32_t databaseIndex = textureMap.replacementMap.db.addReplacement(replacement);
+        textureMap.replacementMap.resolvedPathMap[hash] = { relativePath, databaseIndex };
 
         // Replace the texture in the cache.
         textureMap.replace(hash, newTexture);
@@ -1124,7 +1175,7 @@ namespace RT64 {
             textureMap.replacementMap.db = ReplacementDatabase();
         }
 
-        textureMap.replacementMap.resolveAutoPaths();
+        textureMap.replacementMap.resolvePaths();
 
         // Queue all currently loaded hashes to detect replacements with.
         {

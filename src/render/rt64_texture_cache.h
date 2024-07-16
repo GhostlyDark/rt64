@@ -50,8 +50,8 @@ namespace RT64 {
     typedef std::list<AccessPair> AccessList;
 
     struct ReplacementMap {
-        struct AutoPath {
-            std::string resolvedPath;
+        struct ResolvedPath {
+            std::string relativePath;
             uint32_t databaseIndex;
         };
 
@@ -59,7 +59,7 @@ namespace RT64 {
         std::vector<Texture *> loadedTextures;
         std::vector<Texture *> evictedTextures;
         std::unordered_map<uint64_t, uint32_t> pathHashToLoadMap;
-        std::unordered_map<uint64_t, AutoPath> autoPathMap;
+        std::unordered_map<uint64_t, ResolvedPath> resolvedPathMap;
         std::filesystem::path directoryPath;
 
         ReplacementMap();
@@ -67,7 +67,7 @@ namespace RT64 {
         void clear();
         bool readDatabase(std::istream &stream);
         bool saveDatabase(std::ostream &stream);
-        void resolveAutoPaths();
+        void resolvePaths();
         void removeUnusedEntriesFromDatabase();
         bool getInformationFromHash(uint64_t tmemHash, std::string &relativePath, uint32_t &databaseIndex) const;
         void addLoadedTexture(Texture *texture, const std::string &relativePath);

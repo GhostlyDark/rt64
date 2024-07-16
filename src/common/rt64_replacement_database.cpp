@@ -9,15 +9,18 @@
 namespace RT64 {
     // ReplacementDatabase
 
-    void ReplacementDatabase::addReplacement(const ReplacementTexture &texture) {
+    uint32_t ReplacementDatabase::addReplacement(const ReplacementTexture &texture) {
         const uint64_t rt64 = stringToHash(texture.hashes.rt64);
         auto it = tmemHashToReplaceMap.find(rt64);
         if (it != tmemHashToReplaceMap.end()) {
             textures[it->second] = texture;
+            return it->second;
         }
         else {
-            tmemHashToReplaceMap[rt64] = uint32_t(textures.size());
+            uint32_t textureIndex = uint32_t(textures.size());
+            tmemHashToReplaceMap[rt64] = textureIndex;
             textures.emplace_back(texture);
+            return textureIndex;
         }
     }
 
