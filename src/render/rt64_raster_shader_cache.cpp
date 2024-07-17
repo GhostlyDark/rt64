@@ -92,7 +92,7 @@ namespace RT64 {
         dumpStream.open(path, std::ios::binary);
         return dumpStream.is_open();
     }
-
+    
     bool RasterShaderCache::OfflineDumper::stepDumping(const ShaderDescription &shaderDesc, const std::vector<uint8_t> &vsDxilBytes, const std::vector<uint8_t> &psDxilBytes) {
         assert(!vsDxilBytes.empty());
         assert(!psDxilBytes.empty());

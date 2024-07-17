@@ -2,11 +2,19 @@
 // RT64
 //
 
+#include <filesystem>
+
 #include <json/json.hpp>
 
 using json = nlohmann::json;
 
 namespace RT64 {
+    extern const std::string ReplacementDatabaseFilename;
+    extern const std::string ReplacementLowMipCacheFilename;
+    extern const std::string ReplacementKnownExtensions[];
+    extern const uint32_t ReplacementMipmapCacheHeaderMagic;
+    extern const uint32_t ReplacementMipmapCacheHeaderVersion;
+
     enum class ReplacementLoad {
         Preload,
         Stream,
@@ -65,6 +73,21 @@ namespace RT64 {
         }
     };
 
+    struct ReplacementResolvedPath {
+        std::string relativePath;
+        uint32_t databaseIndex;
+    };
+
+    struct ReplacementMipmapCacheHeader {
+        uint32_t magic = ReplacementMipmapCacheHeaderMagic;
+        uint32_t version = ReplacementMipmapCacheHeaderVersion;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t dxgiFormat = 0;
+        uint32_t mipCount = 0;
+        uint32_t pathLength = 0;
+    };
+
     struct ReplacementDatabase {
         ReplacementConfiguration config;
         std::vector<ReplacementTexture> textures;
@@ -74,9 +97,14 @@ namespace RT64 {
         void fixReplacement(const std::string &hash, const ReplacementTexture &texture);
         ReplacementTexture getReplacement(const std::string &hash) const;
         void buildHashMaps();
+        void resolvePaths(const std::filesystem::path &directoryPath, std::unordered_map<uint64_t, ReplacementResolvedPath> &resolvedPathMap, bool onlyDDS);
         static uint64_t stringToHash(const std::string &str);
         static std::string hashToString(uint32_t hash);
         static std::string hashToString(uint64_t hash);
+        static bool isExtensionKnown(const std::string &extension, bool onlyDDS);
+        static bool endsWith(const std::string &str, const std::string &end);
+        static std::string toLower(std::string str);
+        static std::string removeKnownExtension(const std::string &path);
     };
 
     extern void to_json(json &j, const ReplacementConfiguration &config);

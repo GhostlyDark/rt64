@@ -50,24 +50,18 @@ namespace RT64 {
     typedef std::list<AccessPair> AccessList;
 
     struct ReplacementMap {
-        struct ResolvedPath {
-            std::string relativePath;
-            uint32_t databaseIndex;
-        };
-
         ReplacementDatabase db;
         std::vector<Texture *> loadedTextures;
-        std::vector<Texture *> evictedTextures;
         std::unordered_map<uint64_t, uint32_t> pathHashToLoadMap;
-        std::unordered_map<uint64_t, ResolvedPath> resolvedPathMap;
+        std::unordered_map<uint64_t, ReplacementResolvedPath> resolvedPathMap;
+        std::unordered_map<std::string, Texture *> lowMipCacheTextures;
         std::filesystem::path directoryPath;
 
         ReplacementMap();
         ~ReplacementMap();
-        void clear();
+        void clear(std::vector<Texture *> &evictedTextures);
         bool readDatabase(std::istream &stream);
         bool saveDatabase(std::ostream &stream);
-        void resolvePaths();
         void removeUnusedEntriesFromDatabase();
         bool getInformationFromHash(uint64_t tmemHash, std::string &relativePath, uint32_t &databaseIndex) const;
         void addLoadedTexture(Texture *texture, const std::string &relativePath);
@@ -85,6 +79,7 @@ namespace RT64 {
     struct HashTexturePair {
         uint64_t hash = 0;
         Texture *texture = nullptr;
+        bool lowPriorityReplacement = false;
     };
 
     struct TextureMap {
@@ -108,7 +103,7 @@ namespace RT64 {
         ~TextureMap();
         void clearReplacements();
         void add(uint64_t hash, uint64_t creationFrame, Texture *texture);
-        void replace(uint64_t hash, Texture *texture);
+        void replace(uint64_t hash, Texture *texture, bool ignoreIfFull);
         bool use(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex, interop::float2 &textureScale, bool &textureReplaced, bool &hasMipmaps);
         bool evict(uint64_t submissionFrame, std::vector<uint64_t> &evictedHashes);
         void incrementLock();
@@ -163,6 +158,7 @@ namespace RT64 {
         std::atomic<bool> uploadThreadRunning;
         std::queue<StreamDescription> streamDescQueue;
         std::mutex streamDescQueueMutex;
+        int32_t streamDescQueueActiveCount = 0;
         std::condition_variable streamDescQueueChanged;
         std::list<std::unique_ptr<StreamThread>> streamThreads;
         std::queue<HashTexturePair> streamedTextureQueue;
@@ -189,9 +185,11 @@ namespace RT64 {
         bool evict(uint64_t submissionFrame, std::vector<uint64_t> &evictedHashes);
         void incrementLock();
         void decrementLock();
+        void waitForAllStreamThreads();
         Texture *getTexture(uint32_t textureIndex);
         static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr);
         static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
+        static bool setLowMipCache(std::unordered_map<std::string, Texture *> &dstTextureMap, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource);
         static bool loadBytesFromPath(const std::filesystem::path &path, std::vector<uint8_t> &bytes);
         static Texture *loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
     };

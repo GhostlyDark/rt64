@@ -53,6 +53,7 @@ endif()
 
 add_subdirectory(src/tools/file_to_c)
 add_subdirectory(src/tools/texture_hasher)
+add_subdirectory(src/tools/texture_packer)
 add_subdirectory(src/contrib/nativefiledialog-extended)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
