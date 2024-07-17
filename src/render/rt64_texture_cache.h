@@ -72,8 +72,6 @@ namespace RT64 {
     struct ReplacementCheck {
         uint64_t textureHash = 0;
         uint64_t databaseHash = 0;
-        uint32_t minMipWidth = 0;
-        uint32_t minMipHeight = 0;
     };
 
     struct HashTexturePair {
@@ -96,7 +94,6 @@ namespace RT64 {
         std::vector<AccessList::iterator> listIterators;
         std::vector<Texture *> evictedTextures;
         ReplacementMap replacementMap;
-        std::mutex replacementMapMutex;
         bool replacementMapEnabled;
 
         TextureMap();
@@ -114,22 +111,30 @@ namespace RT64 {
 
     struct TextureCache {
         struct StreamDescription {
-            uint64_t hash = 0;
             std::filesystem::path filePath;
             std::string relativePath;
-            uint32_t minMipWidth = 0;
-            uint32_t minMipHeight = 0;
 
             StreamDescription() {
                 // Default constructor.
             }
 
-            StreamDescription(uint64_t hash, const std::filesystem::path &filePath, const std::string &relativePath, uint32_t minMipWidth, uint32_t minMipHeight) {
-                this->hash = hash;
+            StreamDescription(const std::filesystem::path &filePath, const std::string &relativePath) {
                 this->filePath = filePath;
                 this->relativePath = relativePath;
-                this->minMipWidth = minMipWidth;
-                this->minMipHeight = minMipHeight;
+            }
+        };
+
+        struct StreamResult {
+            Texture *texture = nullptr;
+            std::string relativePath;
+
+            StreamResult() {
+                // Default constructor.
+            }
+
+            StreamResult(Texture *texture, const std::string &relativePath) {
+                this->texture = texture;
+                this->relativePath = relativePath;
             }
         };
 
@@ -148,6 +153,7 @@ namespace RT64 {
         const ShaderLibrary *shaderLibrary;
         std::vector<TextureUpload> uploadQueue;
         std::vector<ReplacementCheck> replacementQueue;
+        std::vector<StreamResult> streamResultQueue;
         std::vector<std::unique_ptr<RenderBuffer>> tmemUploadResources;
         std::vector<std::unique_ptr<RenderBuffer>> replacementUploadResources;
         std::vector<std::unique_ptr<TextureDecodeDescriptorSet>> descriptorSets;
@@ -158,11 +164,11 @@ namespace RT64 {
         std::atomic<bool> uploadThreadRunning;
         std::queue<StreamDescription> streamDescQueue;
         std::mutex streamDescQueueMutex;
-        int32_t streamDescQueueActiveCount = 0;
         std::condition_variable streamDescQueueChanged;
+        int32_t streamDescQueueActiveCount = 0;
+        std::unordered_set<std::string> streamDescQueueSet;
         std::list<std::unique_ptr<StreamThread>> streamThreads;
-        std::queue<HashTexturePair> streamedTextureQueue;
-        std::mutex streamedTextureQueueMutex;
+        std::unordered_multimap<std::string, ReplacementCheck> streamPendingReplacementChecks;
         TextureMap textureMap;
         std::mutex textureMapMutex;
         RenderWorker *threadWorker;
@@ -188,9 +194,9 @@ namespace RT64 {
         void waitForAllStreamThreads();
         Texture *getTexture(uint32_t textureIndex);
         static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr);
-        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
+        static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr);
         static bool setLowMipCache(std::unordered_map<std::string, Texture *> &dstTextureMap, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource);
         static bool loadBytesFromPath(const std::filesystem::path &path, std::vector<uint8_t> &bytes);
-        static Texture *loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
+        static Texture *loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool = nullptr, std::mutex *uploadResourcePoolMutex = nullptr);
     };
 };
