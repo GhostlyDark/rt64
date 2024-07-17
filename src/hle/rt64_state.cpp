@@ -2170,7 +2170,7 @@ namespace RT64 {
                     if (loadDirectory) {
                         std::filesystem::path newPath = FileDialog::getDirectoryPath();
                         if (!newPath.empty()) {
-                            ext.textureCache->loadReplacementDirectory(newPath);
+                            ext.textureCache->loadReplacementDirectory(ext.framebufferGraphicsWorker, newPath);
                         }
                     }
                     else if (saveDirectory) {
@@ -2256,7 +2256,7 @@ namespace RT64 {
                 if (ImGui::BeginTabItem("Debugger", nullptr, debuggerSelected ? ImGuiTabItemFlags_SetSelected : 0)) {
                     DrawCallKey callKey;
                     bool createCallMod;
-                    debuggerInspector.inspect(lastScreenVI, workload, framebufferManager, *ext.textureCache, callKey, createCallMod, ext.appWindow->windowHandle);
+                    debuggerInspector.inspect(ext.framebufferGraphicsWorker, lastScreenVI, workload, framebufferManager, *ext.textureCache, callKey, createCallMod, ext.appWindow->windowHandle);
                     if (createCallMod) {
                         drawCallLibraryInspector.promptForNew(callKey);
                     }

@@ -195,7 +195,7 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
         }
     };
 
-    auto ReverseDXT = [&](uint32_t val, uint32_t lrs, uint32_t width, uint32_t size) {
+    auto ReverseDXT = [&](uint32_t val, uint32_t width, uint32_t size) {
         if (val == 0x800) {
             return 1;
         }
@@ -262,7 +262,7 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
         else {
             uint32_t dxt = loadOp.tile.lrt;
             if (dxt > 1) {
-                dxt = ReverseDXT(dxt, loadOp.tile.lrs, loadOp.texture.width, loadOp.texture.siz);
+                dxt = ReverseDXT(dxt, loadOp.texture.width, loadOp.texture.siz);
             }
 
             bpl = dxt << 3;

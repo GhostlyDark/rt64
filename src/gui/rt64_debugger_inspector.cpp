@@ -158,7 +158,7 @@ namespace RT64 {
         return openCall;
     }
     
-    void DebuggerInspector::inspect(const VI &vi, Workload &workload, FramebufferManager &fbManager, TextureCache &textureCache, DrawCallKey &outDrawCallKey, bool &outCreateDrawCallKey, RenderWindow window) {
+    void DebuggerInspector::inspect(RenderWorker *directWorker, const VI &vi, Workload &workload, FramebufferManager &fbManager, TextureCache &textureCache, DrawCallKey &outDrawCallKey, bool &outCreateDrawCallKey, RenderWindow window) {
         const char ReplaceErrorModalId[32] = "Replace error";
         const char ReplaceOutdatedModalId[32] = "Replace outdated";
 
@@ -1093,7 +1093,7 @@ namespace RT64 {
                                                     if (!textureFilename.empty()) {
                                                         std::filesystem::path relativePath = std::filesystem::relative(textureFilename, textureCache.textureMap.replacementMap.directoryPath);
                                                         if (!relativePath.empty()) {
-                                                            textureCache.addReplacement(callTile.tmemHashOrID, relativePath.u8string());
+                                                            textureCache.addReplacement(directWorker, callTile.tmemHashOrID, relativePath.u8string());
                                                         }
                                                         else {
                                                             ImGui::OpenPopup(ReplaceErrorModalId);

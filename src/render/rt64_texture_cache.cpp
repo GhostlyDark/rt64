@@ -317,7 +317,7 @@ namespace RT64 {
 
         this->textureCache = textureCache;
 
-        worker = std::make_unique<RenderWorker>(textureCache->worker->device, "RT64 Stream Worker", RenderCommandListType::COMPUTE);
+        worker = std::make_unique<RenderWorker>(textureCache->threadWorker->device, "RT64 Stream Worker", RenderCommandListType::COMPUTE);
         thread = std::make_unique<std::thread>(&StreamThread::loop, this);
         threadRunning = false;
     }
@@ -388,10 +388,10 @@ namespace RT64 {
 
     // TextureCache
 
-    TextureCache::TextureCache(RenderWorker *worker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode) {
-        assert(worker != nullptr);
+    TextureCache::TextureCache(RenderWorker *threadWorker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode) {
+        assert(threadWorker != nullptr);
 
-        this->worker = worker;
+        this->threadWorker = threadWorker;
         this->shaderLibrary = shaderLibrary;
         this->developerMode = developerMode;
 
@@ -402,7 +402,7 @@ namespace RT64 {
         poolDesc.heapType = RenderHeapType::UPLOAD;
         poolDesc.useLinearAlgorithm = true;
         poolDesc.allowOnlyBuffers = true;
-        uploadResourcePool = worker->device->createPool(poolDesc);
+        uploadResourcePool = threadWorker->device->createPool(poolDesc);
 
         streamDescQueueActiveCount = threadCount;
 
@@ -902,12 +902,12 @@ namespace RT64 {
                 }
 
                 for (size_t i = descriptorSets.size(); i < queueSize; i++) {
-                    descriptorSets.emplace_back(std::make_unique<TextureDecodeDescriptorSet>(worker->device));
+                    descriptorSets.emplace_back(std::make_unique<TextureDecodeDescriptorSet>(threadWorker->device));
                 }
 
                 // Upload all textures in the queue.
                 {
-                    RenderWorkerExecution execution(worker);
+                    RenderWorkerExecution execution(threadWorker);
                     texturesUploaded.clear();
                     beforeCopyBarriers.clear();
                     for (size_t i = 0; i < queueSize; i++) {
@@ -924,7 +924,7 @@ namespace RT64 {
                         newTexture->format = RenderFormat::R8_UINT;
                         newTexture->width = upload.width;
                         newTexture->height = upload.height;
-                        newTexture->tmem = worker->device->createTexture(RenderTextureDesc::Texture1D(uint32_t(upload.bytesTMEM.size()), 1, newTexture->format));
+                        newTexture->tmem = threadWorker->device->createTexture(RenderTextureDesc::Texture1D(uint32_t(upload.bytesTMEM.size()), 1, newTexture->format));
                         newTexture->tmem->setName("Texture Cache TMEM #" + std::to_string(TMEMGlobalCounter++));
 
                         void *dstData = tmemUploadResources[i]->map();
@@ -934,14 +934,14 @@ namespace RT64 {
                         beforeCopyBarriers.emplace_back(RenderTextureBarrier(newTexture->tmem.get(), RenderTextureLayout::COPY_DEST));
                     }
 
-                    worker->commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
+                    threadWorker->commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
 
                     beforeDecodeBarriers.clear();
                     for (size_t i = 0; i < queueSize; i++) {
                         const TextureUpload &upload = queueCopy[i];
                         const uint32_t byteCount = uint32_t(upload.bytesTMEM.size());
                         Texture *dstTexture = texturesUploaded[i].texture;
-                        worker->commandList->copyTextureRegion(
+                        threadWorker->commandList->copyTextureRegion(
                             RenderTextureCopyLocation::Subresource(dstTexture->tmem.get()),
                             RenderTextureCopyLocation::PlacedFootprint(tmemUploadResources[i].get(), RenderFormat::R8_UINT, byteCount, 1, 1, byteCount)
                         );
@@ -952,7 +952,7 @@ namespace RT64 {
                             static uint32_t TextureGlobalCounter = 0;
                             TextureDecodeDescriptorSet *descSet = descriptorSets[i].get();
                             dstTexture->format = RenderFormat::R8G8B8A8_UNORM;
-                            dstTexture->texture = worker->device->createTexture(RenderTextureDesc::Texture2D(upload.width, upload.height, 1, dstTexture->format, RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS));
+                            dstTexture->texture = threadWorker->device->createTexture(RenderTextureDesc::Texture2D(upload.width, upload.height, 1, dstTexture->format, RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS));
                             dstTexture->texture->setName("Texture Cache RGBA32 #" + std::to_string(TextureGlobalCounter++));
                             descSet->setTexture(descSet->TMEM, dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ);
                             descSet->setTexture(descSet->RGBA32, dstTexture->texture.get(), RenderTextureLayout::GENERAL);
@@ -960,7 +960,7 @@ namespace RT64 {
                         }
                     }
 
-                    worker->commandList->barriers(RenderBarrierStage::COMPUTE, beforeDecodeBarriers);
+                    threadWorker->commandList->barriers(RenderBarrierStage::COMPUTE, beforeDecodeBarriers);
 
                     const ShaderRecord &textureDecode = shaderLibrary->textureDecode;
                     bool pipelineSet = false;
@@ -969,8 +969,8 @@ namespace RT64 {
                         const TextureUpload &upload = queueCopy[i];
                         if (upload.decodeTMEM) {
                             if (!pipelineSet) {
-                                worker->commandList->setPipeline(textureDecode.pipeline.get());
-                                worker->commandList->setComputePipelineLayout(textureDecode.pipelineLayout.get());
+                                threadWorker->commandList->setPipeline(textureDecode.pipeline.get());
+                                threadWorker->commandList->setComputePipelineLayout(textureDecode.pipelineLayout.get());
                             }
 
                             interop::TextureDecodeCB decodeCB;
@@ -987,9 +987,9 @@ namespace RT64 {
                             const uint32_t ThreadGroupSize = 8;
                             const uint32_t dispatchX = (decodeCB.Resolution.x + ThreadGroupSize - 1) / ThreadGroupSize;
                             const uint32_t dispatchY = (decodeCB.Resolution.y + ThreadGroupSize - 1) / ThreadGroupSize;
-                            worker->commandList->setComputePushConstants(0, &decodeCB);
-                            worker->commandList->setComputeDescriptorSet(descriptorSets[i]->get(), 0);
-                            worker->commandList->dispatch(dispatchX, dispatchY, 1);
+                            threadWorker->commandList->setComputePushConstants(0, &decodeCB);
+                            threadWorker->commandList->setComputeDescriptorSet(descriptorSets[i]->get(), 0);
+                            threadWorker->commandList->dispatch(dispatchX, dispatchY, 1);
 
                             afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i].texture->texture.get(), RenderTextureLayout::SHADER_READ));
                         }
@@ -1008,7 +1008,7 @@ namespace RT64 {
                     }
 
                     if (!afterDecodeBarriers.empty()) {
-                        worker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
+                        threadWorker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
                     }
 
                     texturesReplaced.clear();
@@ -1052,7 +1052,7 @@ namespace RT64 {
                                 // Load the texture directly on this thread.
                                 else if (TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
                                     replacementUploadResources.emplace_back();
-                                    replacementTexture = TextureCache::loadTextureFromBytes(worker, replacementBytes, replacementUploadResources.back(), nullptr, nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
+                                    replacementTexture = TextureCache::loadTextureFromBytes(threadWorker, replacementBytes, replacementUploadResources.back(), nullptr, nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
 
                                     {
                                         std::unique_lock replacementMapLock(textureMap.replacementMapMutex);
@@ -1138,7 +1138,7 @@ namespace RT64 {
         return useTexture(hash, submissionFrame, textureIndex, textureScale, textureReplaced, hasMipmaps);
     }
     
-    bool TextureCache::addReplacement(uint64_t hash, const std::string &relativePath) {
+    bool TextureCache::addReplacement(RenderWorker *directWorker, uint64_t hash, const std::string &relativePath) {
         // TODO: The case where a replacement is reloaded needs to be handled correctly. Multiple hashes can point to the same path. All hashes pointing to that path must be reloaded correctly.
 
         std::unique_lock lock(textureMapMutex);
@@ -1151,8 +1151,8 @@ namespace RT64 {
         std::unique_ptr<RenderBuffer> dstUploadBuffer;
         Texture *newTexture = nullptr;
         {
-            RenderWorkerExecution execution(worker);
-            newTexture = TextureCache::loadTextureFromBytes(worker, replacementBytes, dstUploadBuffer);
+            RenderWorkerExecution execution(directWorker);
+            newTexture = TextureCache::loadTextureFromBytes(directWorker, replacementBytes, dstUploadBuffer);
         }
 
         // Add the loaded texture to the replacement map.
@@ -1178,7 +1178,7 @@ namespace RT64 {
         return true;
     }
     
-    bool TextureCache::loadReplacementDirectory(const std::filesystem::path &directoryPath) {
+    bool TextureCache::loadReplacementDirectory(RenderWorker *directWorker, const std::filesystem::path &directoryPath) {
         // Wait for the streaming threads to be finished.
         waitForAllStreamThreads();
         
@@ -1209,7 +1209,7 @@ namespace RT64 {
         if (loadBytesFromPath(directoryPath / ReplacementLowMipCacheFilename, mipCacheBytes)) {
             std::unique_lock replacementMapLock(textureMap.replacementMapMutex);
             std::unique_ptr<RenderBuffer> uploadBuffer;
-            if (!setLowMipCache(textureMap.replacementMap.lowMipCacheTextures, worker, mipCacheBytes.data(), mipCacheBytes.size(), uploadBuffer)) {
+            if (!setLowMipCache(textureMap.replacementMap.lowMipCacheTextures, directWorker, mipCacheBytes.data(), mipCacheBytes.size(), uploadBuffer)) {
                 // Delete the textures that were loaded into the low mip cache.
                 for (auto it : textureMap.replacementMap.lowMipCacheTextures) {
                     delete it.second;

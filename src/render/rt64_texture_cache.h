@@ -165,21 +165,21 @@ namespace RT64 {
         std::mutex streamedTextureQueueMutex;
         TextureMap textureMap;
         std::mutex textureMapMutex;
-        RenderWorker *worker;
+        RenderWorker *threadWorker;
         std::unique_ptr<RenderPool> uploadResourcePool;
         std::mutex uploadResourcePoolMutex;
         uint32_t lockCounter;
         bool developerMode;
 
-        TextureCache(RenderWorker *worker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode);
+        TextureCache(RenderWorker *threadWorker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode);
         ~TextureCache();
         void uploadThreadLoop();
         void queueGPUUploadTMEM(uint64_t hash, uint64_t creationFrame, const uint8_t *bytes, int bytesCount, int width, int height, uint32_t tlut, const LoadTile &loadTile, bool decodeTMEM);
         void waitForGPUUploads();
         bool useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex, interop::float2 &textureScale, bool &textureReplaced, bool &hasMipmaps);
         bool useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex);
-        bool addReplacement(uint64_t hash, const std::string &relativePath);
-        bool loadReplacementDirectory(const std::filesystem::path &directoryPath);
+        bool addReplacement(RenderWorker *directWorker, uint64_t hash, const std::string &relativePath);
+        bool loadReplacementDirectory(RenderWorker *directWorker, const std::filesystem::path &directoryPath);
         bool saveReplacementDatabase();
         void removeUnusedEntriesFromDatabase();
         bool evict(uint64_t submissionFrame, std::vector<uint64_t> &evictedHashes);
