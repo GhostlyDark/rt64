@@ -115,7 +115,8 @@ namespace RT64 {
         std::unique_ptr<BufferUploader> workloadExtrasUploader;
         std::unique_ptr<BufferUploader> workloadVelocityUploader;
         std::unique_ptr<BufferUploader> workloadTilesUploader;
-        std::unique_ptr<RenderWorker> textureComputeWorker;
+        std::unique_ptr<RenderWorker> textureDirectWorker;
+        std::unique_ptr<RenderWorker> textureCopyWorker;
         std::unique_ptr<RenderWorker> workloadGraphicsWorker;
         std::unique_ptr<RenderWorker> presentGraphicsWorker;
         std::unique_ptr<RasterShaderCache> rasterShaderCache;

@@ -2170,7 +2170,7 @@ namespace RT64 {
                     if (loadDirectory) {
                         std::filesystem::path newPath = FileDialog::getDirectoryPath();
                         if (!newPath.empty()) {
-                            ext.textureCache->loadReplacementDirectory(ext.framebufferGraphicsWorker, newPath);
+                            ext.textureCache->loadReplacementDirectory(newPath);
                         }
                     }
                     else if (saveDirectory) {

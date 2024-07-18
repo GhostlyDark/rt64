@@ -193,7 +193,8 @@ namespace RT64 {
         workloadVelocityUploader = std::make_unique<BufferUploader>(device.get());
         workloadTilesUploader = std::make_unique<BufferUploader>(device.get());
         framebufferGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Framebuffer Graphics", RenderCommandListType::DIRECT);
-        textureComputeWorker = std::make_unique<RenderWorker>(device.get(), "Texture Compute", RenderCommandListType::COMPUTE);
+        textureDirectWorker = std::make_unique<RenderWorker>(device.get(), "Texture Direct", RenderCommandListType::DIRECT);
+        textureCopyWorker = std::make_unique<RenderWorker>(device.get(), "Texture Copy", RenderCommandListType::COPY);
         workloadGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Workload Graphics", RenderCommandListType::DIRECT);
         presentGraphicsWorker = std::make_unique<RenderWorker>(device.get(), "Present Graphics", RenderCommandListType::DIRECT);
         swapChain = presentGraphicsWorker->commandQueue->createSwapChain(appWindow->windowHandle, 2, RenderFormat::B8G8R8A8_UNORM);
@@ -240,16 +241,16 @@ namespace RT64 {
 
         // Create the texture cache.
         const uint32_t textureCacheThreads = std::max(threadsAvailable / 4U, 1U);
-        textureCache = std::make_unique<TextureCache>(textureComputeWorker.get(), textureCacheThreads, shaderLibrary.get(), userConfig.developerMode);
+        textureCache = std::make_unique<TextureCache>(textureDirectWorker.get(), textureCopyWorker.get(), textureCacheThreads, shaderLibrary.get(), userConfig.developerMode);
 
 #   if RT_ENABLED
         // Create the blue noise texture, upload it and wait for it to finish.
         std::unique_ptr<RenderBuffer> blueNoiseUploadBuffer;
-        workloadGraphicsWorker->commandList->begin();
-        TextureCache::setRGBA32(&blueNoiseTexture, workloadGraphicsWorker.get(), LDR_64_64_64_RGB1_BGRA8, int(sizeof(LDR_64_64_64_RGB1_BGRA8)), 512, 512, 512 * 4, blueNoiseUploadBuffer);
-        workloadGraphicsWorker->commandList->end();
-        workloadGraphicsWorker->execute();
-        workloadGraphicsWorker->wait();
+        {
+            RenderWorkerExecution execution(workloadGraphicsWorker.get());
+            TextureCache::setRGBA32(&blueNoiseTexture, workloadGraphicsWorker->device, workloadGraphicsWorker->commandList.get(), LDR_64_64_64_RGB1_BGRA8, int(sizeof(LDR_64_64_64_RGB1_BGRA8)), 512, 512, 512 * 4, blueNoiseUploadBuffer);
+        }
+
         blueNoiseUploadBuffer.reset();
 #   endif
         
@@ -520,7 +521,8 @@ namespace RT64 {
 #   endif
         textureCache.reset();
         framebufferGraphicsWorker.reset();
-        textureComputeWorker.reset();
+        textureDirectWorker.reset();
+        textureCopyWorker.reset();
         swapChain.reset();
         workloadGraphicsWorker.reset();
         presentGraphicsWorker.reset();

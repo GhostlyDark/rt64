@@ -1093,7 +1093,7 @@ namespace RT64 {
                                                     if (!textureFilename.empty()) {
                                                         std::filesystem::path relativePath = std::filesystem::relative(textureFilename, textureCache.textureMap.replacementMap.directoryPath);
                                                         if (!relativePath.empty()) {
-                                                            textureCache.addReplacement(directWorker, callTile.tmemHashOrID, relativePath.u8string());
+                                                            textureCache.addReplacement(callTile.tmemHashOrID, relativePath.u8string());
                                                         }
                                                         else {
                                                             ImGui::OpenPopup(ReplaceErrorModalId);

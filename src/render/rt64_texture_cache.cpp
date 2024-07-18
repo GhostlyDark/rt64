@@ -40,7 +40,7 @@ namespace RT64 {
         }
 
         for (auto it : lowMipCacheTextures) {
-            delete it.second;
+            delete it.second.texture;
         }
     }
 
@@ -50,7 +50,7 @@ namespace RT64 {
         }
 
         for (auto it : lowMipCacheTextures) {
-            evictedTextures.emplace_back(it.second);
+            evictedTextures.emplace_back(it.second.texture);
         }
 
         loadedTextures.clear();
@@ -318,7 +318,7 @@ namespace RT64 {
 
         this->textureCache = textureCache;
 
-        worker = std::make_unique<RenderWorker>(textureCache->threadWorker->device, "RT64 Stream Worker", RenderCommandListType::COMPUTE);
+        worker = std::make_unique<RenderWorker>(textureCache->directWorker->device, "RT64 Stream Worker", RenderCommandListType::COPY);
         thread = std::make_unique<std::thread>(&StreamThread::loop, this);
         threadRunning = false;
     }
@@ -360,7 +360,7 @@ namespace RT64 {
             
             if (!streamDesc.filePath.empty() && TextureCache::loadBytesFromPath(streamDesc.filePath, replacementBytes)) {
                 worker->commandList->begin();
-                Texture *texture = TextureCache::loadTextureFromBytes(worker.get(), replacementBytes, uploadResource);
+                Texture *texture = TextureCache::loadTextureFromBytes(worker->device, worker->commandList.get(), replacementBytes, uploadResource);
                 worker->commandList->end();
 
                 // Only execute the command list and wait if the texture was loaded successfully.
@@ -378,22 +378,34 @@ namespace RT64 {
 
     // TextureCache
 
-    TextureCache::TextureCache(RenderWorker *threadWorker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode) {
-        assert(threadWorker != nullptr);
+    TextureCache::TextureCache(RenderWorker *directWorker, RenderWorker *copyWorker, uint32_t threadCount, const ShaderLibrary *shaderLibrary, bool developerMode) {
+        assert(directWorker != nullptr);
 
-        this->threadWorker = threadWorker;
+        this->directWorker = directWorker;
+        this->copyWorker = copyWorker;
         this->shaderLibrary = shaderLibrary;
         this->developerMode = developerMode;
 
         lockCounter = 0;
-        uploadThread = new std::thread(&TextureCache::uploadThreadLoop, this);
 
+        // Copy the command list and fence used by the methods called from the main thread.
+        loaderCommandList = copyWorker->device->createCommandList(RenderCommandListType::COPY);
+        loaderCommandFence = copyWorker->device->createCommandFence();
+
+        // Create the semaphore used to synchronize the copy and the direct command queues.
+        copyToDirectSemaphore = directWorker->device->createCommandSemaphore();
+
+        // Create upload pool.
         RenderPoolDesc poolDesc;
         poolDesc.heapType = RenderHeapType::UPLOAD;
         poolDesc.useLinearAlgorithm = true;
         poolDesc.allowOnlyBuffers = true;
-        uploadResourcePool = threadWorker->device->createPool(poolDesc);
+        uploadResourcePool = directWorker->device->createPool(poolDesc);
 
+        // Create upload thread.
+        uploadThread = new std::thread(&TextureCache::uploadThreadLoop, this);
+
+        // Create streaming threads.
         streamDescQueueActiveCount = threadCount;
 
         for (uint32_t i = 0; i < threadCount; i++) {
@@ -415,9 +427,10 @@ namespace RT64 {
         uploadResourcePool.reset(nullptr);
     }
     
-    void TextureCache::setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex) {
+    void TextureCache::setRGBA32(Texture *dstTexture, RenderDevice *device, RenderCommandList *commandList, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex) {
         assert(dstTexture != nullptr);
-        assert(worker != nullptr);
+        assert(device != nullptr);
+        assert(commandList != nullptr);
         assert(bytes != nullptr);
         assert(width > 0);
         assert(height > 0);
@@ -431,7 +444,7 @@ namespace RT64 {
         uint32_t rowByteWidth, rowBytePadding;
         CalculateTextureRowWidthPadding(rowPitch, rowByteWidth, rowBytePadding);
 
-        dstTexture->texture = worker->device->createTexture(RenderTextureDesc::Texture2D(width, height, 1, dstTexture->format));
+        dstTexture->texture = device->createTexture(RenderTextureDesc::Texture2D(width, height, 1, dstTexture->format));
 
         if (uploadResourcePool != nullptr) {
             assert(uploadResourcePoolMutex != nullptr);
@@ -439,7 +452,7 @@ namespace RT64 {
             dstUploadResource = uploadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(rowByteWidth * height));
         }
         else {
-            dstUploadResource = worker->device->createBuffer(RenderBufferDesc::UploadBuffer(rowByteWidth * height));
+            dstUploadResource = device->createBuffer(RenderBufferDesc::UploadBuffer(rowByteWidth * height));
         }
 
         uint8_t *dstData = reinterpret_cast<uint8_t *>(dstUploadResource->map());
@@ -460,9 +473,8 @@ namespace RT64 {
         dstUploadResource->unmap();
 
         uint32_t rowWidth = rowByteWidth / RenderFormatSize(dstTexture->format);
-        worker->commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
-        worker->commandList->copyTextureRegion(RenderTextureCopyLocation::Subresource(dstTexture->texture.get()), RenderTextureCopyLocation::PlacedFootprint(dstUploadResource.get(), dstTexture->format, width, height, 1, rowWidth));
-        worker->commandList->barriers(RenderBarrierStage::COMPUTE, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::SHADER_READ));
+        commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
+        commandList->copyTextureRegion(RenderTextureCopyLocation::Subresource(dstTexture->texture.get()), RenderTextureCopyLocation::PlacedFootprint(dstUploadResource.get(), dstTexture->format, width, height, 1, rowWidth));
     }
 
     static RenderTextureDimension toRenderDimension(ddspp::TextureType type) {
@@ -633,9 +645,10 @@ namespace RT64 {
         }
     }
 
-    bool TextureCache::setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex) {
+    bool TextureCache::setDDS(Texture *dstTexture, RenderDevice *device, RenderCommandList *commandList, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool, std::mutex *uploadResourcePoolMutex) {
         assert(dstTexture != nullptr);
-        assert(worker != nullptr);
+        assert(device != nullptr);
+        assert(commandList != nullptr);
         assert(bytes != nullptr);
 
         ddspp::Descriptor ddsDescriptor;
@@ -652,7 +665,7 @@ namespace RT64 {
         desc.mipLevels = ddsDescriptor.numMips;
         desc.format = toRenderFormat(ddsDescriptor.format);
 
-        dstTexture->texture = worker->device->createTexture(desc);
+        dstTexture->texture = device->createTexture(desc);
         dstTexture->width = ddsDescriptor.width;
         dstTexture->height = ddsDescriptor.height;
         dstTexture->mipmaps = desc.mipLevels;
@@ -682,7 +695,7 @@ namespace RT64 {
             dstUploadResource = uploadResourcePool->createBuffer(RenderBufferDesc::UploadBuffer(uploadBufferSize));
         }
         else {
-            dstUploadResource = worker->device->createBuffer(RenderBufferDesc::UploadBuffer(uploadBufferSize));
+            dstUploadResource = device->createBuffer(RenderBufferDesc::UploadBuffer(uploadBufferSize));
         }
 
         // Copy each mipmap into the buffer with the correct padding applied.
@@ -697,23 +710,21 @@ namespace RT64 {
         }
 
         dstUploadResource->unmap();
-        worker->commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
+        commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::COPY_DEST));
 
         for (uint32_t mip = 0; mip < desc.mipLevels; mip++) {
             uint32_t offset = mipmapOffsets[mip];
             uint32_t mipWidth = std::max(desc.width >> mip, 1U);
             uint32_t mipHeight = std::max(desc.height >> mip, 1U);
             uint32_t rowWidth = mipWidth;
-            worker->commandList->copyTextureRegion(RenderTextureCopyLocation::Subresource(dstTexture->texture.get(), mip), RenderTextureCopyLocation::PlacedFootprint(dstUploadResource.get(), desc.format, mipWidth, mipHeight, 1, rowWidth, offset));
+            commandList->copyTextureRegion(RenderTextureCopyLocation::Subresource(dstTexture->texture.get(), mip), RenderTextureCopyLocation::PlacedFootprint(dstUploadResource.get(), desc.format, mipWidth, mipHeight, 1, rowWidth, offset));
         }
-
-        worker->commandList->barriers(RenderBarrierStage::COMPUTE, RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::SHADER_READ));
 
         return true;
     }
 
-    bool TextureCache::setLowMipCache(std::unordered_map<std::string, Texture *> &dstTextureMap, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource) {
-        dstUploadResource = worker->device->createBuffer(RenderBufferDesc::UploadBuffer(byteCount));
+    bool TextureCache::setLowMipCache(RenderDevice *device, RenderCommandList *commandList, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, std::unordered_map<std::string, LowMipCacheTexture> &dstTextureMap) {
+        dstUploadResource = device->createBuffer(RenderBufferDesc::UploadBuffer(byteCount));
 
         // Upload the entire file to the GPU to copy data from it directly.
         void *uploadData = dstUploadResource->map();
@@ -723,7 +734,6 @@ namespace RT64 {
         std::vector<RenderTextureBarrier> beforeCopyBarriers;
         std::vector<RenderTextureCopyLocation> copyDestinations;
         std::vector<RenderTextureCopyLocation> copySources;
-        std::vector<RenderTextureBarrier> afterCopyBarriers;
         size_t byteCursor = 0;
         while (byteCursor < byteCount) {
             const ReplacementMipmapCacheHeader *cacheHeader = reinterpret_cast<const ReplacementMipmapCacheHeader *>(&bytes[byteCursor]);
@@ -749,7 +759,7 @@ namespace RT64 {
             RenderFormat renderFormat = toRenderFormat(ddspp::DXGIFormat(cacheHeader->dxgiFormat));
             RenderTextureDesc textureDesc = RenderTextureDesc::Texture2D(cacheHeader->width, cacheHeader->height, cacheHeader->mipCount, renderFormat);
             Texture *newTexture = new Texture();
-            newTexture->texture = worker->device->createTexture(textureDesc);
+            newTexture->texture = device->createTexture(textureDesc);
             newTexture->format = renderFormat;
             newTexture->width = cacheHeader->width;
             newTexture->height = cacheHeader->height;
@@ -762,23 +772,17 @@ namespace RT64 {
                 beforeCopyBarriers.emplace_back(RenderTextureBarrier(newTexture->texture.get(), RenderTextureLayout::COPY_DEST));
                 copyDestinations.emplace_back(RenderTextureCopyLocation::Subresource(newTexture->texture.get(), i));
                 copySources.emplace_back(RenderTextureCopyLocation::PlacedFootprint(dstUploadResource.get(), renderFormat, mipWidth, mipHeight, 1, rowWidth, byteCursor));
-                afterCopyBarriers.emplace_back(RenderTextureBarrier(newTexture->texture.get(), RenderTextureLayout::SHADER_READ));
                 byteCursor += mipSizes[i];
             }
 
-            dstTextureMap[cachePath] = newTexture;
+            dstTextureMap[cachePath] = { newTexture, false };
         }
 
-        // Execute all texture copies together.
-        {
-            RenderWorkerExecution execution(worker);
-            worker->commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
+        // Record to the command list.
+        commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
 
-            for (size_t i = 0; i < copyDestinations.size(); i++) {
-                worker->commandList->copyTextureRegion(copyDestinations[i], copySources[i]);
-            }
-
-            worker->commandList->barriers(RenderBarrierStage::COMPUTE, afterCopyBarriers);
+        for (size_t i = 0; i < copyDestinations.size(); i++) {
+            commandList->copyTextureRegion(copyDestinations[i], copySources[i]);
         }
 
         return true;
@@ -798,14 +802,14 @@ namespace RT64 {
         }
     }
 
-    Texture *TextureCache::loadTextureFromBytes(RenderWorker *worker, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool, std::mutex *uploadResourcePoolMutex) {
+    Texture *TextureCache::loadTextureFromBytes(RenderDevice *device, RenderCommandList *commandList, const std::vector<uint8_t> &fileBytes, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *resourcePool, std::mutex *uploadResourcePoolMutex) {
         const uint32_t PNG_MAGIC = 0x474E5089;
         Texture *replacementTexture = new Texture();
         uint32_t magicNumber = *reinterpret_cast<const uint32_t *>(fileBytes.data());
         bool loadedTexture = false;
         switch (magicNumber) {
         case ddspp::DDS_MAGIC:
-            loadedTexture = TextureCache::setDDS(replacementTexture, worker, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool, uploadResourcePoolMutex);
+            loadedTexture = TextureCache::setDDS(replacementTexture, device, commandList, fileBytes.data(), fileBytes.size(), dstUploadResource, resourcePool, uploadResourcePoolMutex);
             break;
         case PNG_MAGIC: {
             int width, height;
@@ -813,7 +817,7 @@ namespace RT64 {
             if (data != nullptr) {
                 uint32_t rowPitch = uint32_t(width) * 4;
                 size_t byteCount = uint32_t(height) * rowPitch;
-                TextureCache::setRGBA32(replacementTexture, worker, data, byteCount, uint32_t(width), uint32_t(height), rowPitch, dstUploadResource, resourcePool);
+                TextureCache::setRGBA32(replacementTexture, device, commandList, data, byteCount, uint32_t(width), uint32_t(height), rowPitch, dstUploadResource, resourcePool);
                 stbi_image_free(data);
                 loadedTexture = true;
             }
@@ -853,6 +857,9 @@ namespace RT64 {
         while (uploadThreadRunning) {
             replacementQueueCopy.clear();
             streamResultQueueCopy.clear();
+            beforeCopyBarriers.clear();
+            beforeDecodeBarriers.clear();
+            afterDecodeBarriers.clear();
 
             // Check the top of the queue or wait if it's empty.
             {
@@ -879,6 +886,7 @@ namespace RT64 {
             for (const StreamResult &result : streamResultQueueCopy) {
                 // Add the texture to the replacement pool as a loaded texture.
                 textureMap.replacementMap.addLoadedTexture(result.texture, result.relativePath);
+                afterDecodeBarriers.emplace_back(result.texture->texture.get(), RenderTextureLayout::SHADER_READ);
 
                 // Add all the pending replacement checks.
                 auto it = streamPendingReplacementChecks.find(result.relativePath);
@@ -901,170 +909,188 @@ namespace RT64 {
                 }
 
                 for (size_t i = descriptorSets.size(); i < queueSize; i++) {
-                    descriptorSets.emplace_back(std::make_unique<TextureDecodeDescriptorSet>(threadWorker->device));
+                    descriptorSets.emplace_back(std::make_unique<TextureDecodeDescriptorSet>(directWorker->device));
                 }
 
-                // Upload all textures in the queue.
-                {
-                    RenderWorkerExecution execution(threadWorker);
-                    texturesUploaded.clear();
-                    beforeCopyBarriers.clear();
-                    for (size_t i = 0; i < queueSize; i++) {
-                        static uint32_t TMEMGlobalCounter = 0;
-                        const TextureUpload &upload = queueCopy[i];
-                        Texture *newTexture = new Texture();
-                        newTexture->creationFrame = upload.creationFrame;
-                        texturesUploaded.emplace_back(HashTexturePair{ upload.hash, newTexture, false });
+                // Upload all textures in the queue using the copy worker. It's worth noting the usage of a copy worker during copy texture operations is intentional
+                // to avoid issues with drivers that are not very explicit about where they execute the copy texture operations and end up causing subtle synchronization
+                // issues that can't be accounted for. Using dedicated copy queues for these operations has shown to eliminate these issues entirely.
+                copyWorker->commandList->begin();
+                texturesUploaded.clear();
 
-                        if (developerMode) {
-                            newTexture->bytesTMEM = upload.bytesTMEM;
-                        }
+                for (size_t i = 0; i < queueSize; i++) {
+                    static uint32_t TMEMGlobalCounter = 0;
+                    const TextureUpload &upload = queueCopy[i];
+                    Texture *newTexture = new Texture();
+                    newTexture->creationFrame = upload.creationFrame;
+                    texturesUploaded.emplace_back(HashTexturePair{ upload.hash, newTexture, false });
 
-                        newTexture->format = RenderFormat::R8_UINT;
-                        newTexture->width = upload.width;
-                        newTexture->height = upload.height;
-                        newTexture->tmem = threadWorker->device->createTexture(RenderTextureDesc::Texture1D(uint32_t(upload.bytesTMEM.size()), 1, newTexture->format));
-                        newTexture->tmem->setName("Texture Cache TMEM #" + std::to_string(TMEMGlobalCounter++));
-
-                        void *dstData = tmemUploadResources[i]->map();
-                        memcpy(dstData, upload.bytesTMEM.data(), upload.bytesTMEM.size());
-                        tmemUploadResources[i]->unmap();
-
-                        beforeCopyBarriers.emplace_back(RenderTextureBarrier(newTexture->tmem.get(), RenderTextureLayout::COPY_DEST));
+                    if (developerMode) {
+                        newTexture->bytesTMEM = upload.bytesTMEM;
                     }
 
-                    threadWorker->commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
+                    newTexture->format = RenderFormat::R8_UINT;
+                    newTexture->width = upload.width;
+                    newTexture->height = upload.height;
+                    newTexture->tmem = copyWorker->device->createTexture(RenderTextureDesc::Texture1D(uint32_t(upload.bytesTMEM.size()), 1, newTexture->format));
+                    newTexture->tmem->setName("Texture Cache TMEM #" + std::to_string(TMEMGlobalCounter++));
 
-                    beforeDecodeBarriers.clear();
-                    for (size_t i = 0; i < queueSize; i++) {
-                        const TextureUpload &upload = queueCopy[i];
-                        const uint32_t byteCount = uint32_t(upload.bytesTMEM.size());
-                        Texture *dstTexture = texturesUploaded[i].texture;
-                        threadWorker->commandList->copyTextureRegion(
-                            RenderTextureCopyLocation::Subresource(dstTexture->tmem.get()),
-                            RenderTextureCopyLocation::PlacedFootprint(tmemUploadResources[i].get(), RenderFormat::R8_UINT, byteCount, 1, 1, byteCount)
-                        );
+                    void *dstData = tmemUploadResources[i]->map();
+                    memcpy(dstData, upload.bytesTMEM.data(), upload.bytesTMEM.size());
+                    tmemUploadResources[i]->unmap();
 
-                        beforeDecodeBarriers.emplace_back(RenderTextureBarrier(dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ));
+                    beforeCopyBarriers.emplace_back(newTexture->tmem.get(), RenderTextureLayout::COPY_DEST);
+                }
 
-                        if (upload.decodeTMEM) {
-                            static uint32_t TextureGlobalCounter = 0;
-                            TextureDecodeDescriptorSet *descSet = descriptorSets[i].get();
-                            dstTexture->format = RenderFormat::R8G8B8A8_UNORM;
-                            dstTexture->texture = threadWorker->device->createTexture(RenderTextureDesc::Texture2D(upload.width, upload.height, 1, dstTexture->format, RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS));
-                            dstTexture->texture->setName("Texture Cache RGBA32 #" + std::to_string(TextureGlobalCounter++));
-                            descSet->setTexture(descSet->TMEM, dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ);
-                            descSet->setTexture(descSet->RGBA32, dstTexture->texture.get(), RenderTextureLayout::GENERAL);
-                            beforeDecodeBarriers.emplace_back(RenderTextureBarrier(dstTexture->texture.get(), RenderTextureLayout::GENERAL));
-                        }
-                    }
+                copyWorker->commandList->barriers(RenderBarrierStage::COPY, beforeCopyBarriers);
 
-                    threadWorker->commandList->barriers(RenderBarrierStage::COMPUTE, beforeDecodeBarriers);
+                for (size_t i = 0; i < queueSize; i++) {
+                    const TextureUpload &upload = queueCopy[i];
+                    const uint32_t byteCount = uint32_t(upload.bytesTMEM.size());
+                    Texture *dstTexture = texturesUploaded[i].texture;
+                    copyWorker->commandList->copyTextureRegion(
+                        RenderTextureCopyLocation::Subresource(dstTexture->tmem.get()),
+                        RenderTextureCopyLocation::PlacedFootprint(tmemUploadResources[i].get(), RenderFormat::R8_UINT, byteCount, 1, 1, byteCount)
+                    );
 
-                    const ShaderRecord &textureDecode = shaderLibrary->textureDecode;
-                    bool pipelineSet = false;
-                    afterDecodeBarriers.clear();
-                    for (size_t i = 0; i < queueSize; i++) {
-                        const TextureUpload &upload = queueCopy[i];
-                        if (upload.decodeTMEM) {
-                            if (!pipelineSet) {
-                                threadWorker->commandList->setPipeline(textureDecode.pipeline.get());
-                                threadWorker->commandList->setComputePipelineLayout(textureDecode.pipelineLayout.get());
-                            }
+                    beforeDecodeBarriers.emplace_back(dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ);
 
-                            interop::TextureDecodeCB decodeCB;
-                            decodeCB.Resolution.x = upload.width;
-                            decodeCB.Resolution.y = upload.height;
-                            decodeCB.fmt = upload.loadTile.fmt;
-                            decodeCB.siz = upload.loadTile.siz;
-                            decodeCB.address = interop::uint(upload.loadTile.tmem) << 3;
-                            decodeCB.stride = interop::uint(upload.loadTile.line) << 3;
-                            decodeCB.tlut = upload.tlut;
-                            decodeCB.palette = upload.loadTile.palette;
+                    if (upload.decodeTMEM) {
+                        static uint32_t TextureGlobalCounter = 0;
+                        TextureDecodeDescriptorSet *descSet = descriptorSets[i].get();
+                        dstTexture->format = RenderFormat::R8G8B8A8_UNORM;
+                        dstTexture->texture = directWorker->device->createTexture(RenderTextureDesc::Texture2D(upload.width, upload.height, 1, dstTexture->format, RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS));
+                        dstTexture->texture->setName("Texture Cache RGBA32 #" + std::to_string(TextureGlobalCounter++));
+                        descSet->setTexture(descSet->TMEM, dstTexture->tmem.get(), RenderTextureLayout::SHADER_READ);
+                        descSet->setTexture(descSet->RGBA32, dstTexture->texture.get(), RenderTextureLayout::GENERAL);
+                        beforeDecodeBarriers.emplace_back(dstTexture->texture.get(), RenderTextureLayout::GENERAL);
 
-                            // Dispatch compute shader for decoding texture.
-                            const uint32_t ThreadGroupSize = 8;
-                            const uint32_t dispatchX = (decodeCB.Resolution.x + ThreadGroupSize - 1) / ThreadGroupSize;
-                            const uint32_t dispatchY = (decodeCB.Resolution.y + ThreadGroupSize - 1) / ThreadGroupSize;
-                            threadWorker->commandList->setComputePushConstants(0, &decodeCB);
-                            threadWorker->commandList->setComputeDescriptorSet(descriptorSets[i]->get(), 0);
-                            threadWorker->commandList->dispatch(dispatchX, dispatchY, 1);
-
-                            afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i].texture->texture.get(), RenderTextureLayout::SHADER_READ));
+                        // If the database uses an older hash version, we hash TMEM again with the version corresponding to the database.
+                        uint32_t databaseVersion = textureMap.replacementMap.db.config.hashVersion;
+                        uint64_t databaseHash = upload.hash;
+                        if (databaseVersion < TMEMHasher::CurrentHashVersion) {
+                            databaseHash = TMEMHasher::hash(upload.bytesTMEM.data(), upload.loadTile, upload.width, upload.height, upload.tlut, databaseVersion);
                         }
 
-                        if ((upload.width > 0) && (upload.height > 0)) {
-                            // If the database uses an older hash version, we hash TMEM again with the version corresponding to the database.
-                            uint32_t databaseVersion = textureMap.replacementMap.db.config.hashVersion;
-                            uint64_t databaseHash = upload.hash;
-                            if (databaseVersion < TMEMHasher::CurrentHashVersion) {
-                                databaseHash = TMEMHasher::hash(upload.bytesTMEM.data(), upload.loadTile, upload.width, upload.height, upload.tlut, databaseVersion);
-                            }
-
-                            // Add this hash so it's checked for a replacement.
-                            replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, databaseHash });
-                        }
-                    }
-
-                    if (!afterDecodeBarriers.empty()) {
-                        threadWorker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
-                    }
-
-                    texturesReplaced.clear();
-
-                    for (const ReplacementCheck &replacementCheck : replacementQueueCopy) {
-                        std::string relativePath;
-                        uint32_t databaseIndex = 0;
-                        if (textureMap.replacementMap.getInformationFromHash(replacementCheck.databaseHash, relativePath, databaseIndex)) {
-                            const ReplacementTexture &databaseTexture = textureMap.replacementMap.db.textures[databaseIndex];
-                            Texture *replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
-                            Texture *lowMipCacheTexture = nullptr;
-
-                            // Look for the low mip cache version if it exists if we can't use the real replacement yet.
-                            if ((replacementTexture == nullptr) && (databaseTexture.load == ReplacementLoad::Stream)) {
-                                auto lowMipCacheIt = textureMap.replacementMap.lowMipCacheTextures.find(relativePath);
-                                if (lowMipCacheIt != textureMap.replacementMap.lowMipCacheTextures.end()) {
-                                    lowMipCacheTexture = lowMipCacheIt->second;
-                                }
-                            }
-
-                            // Replacement texture hasn't been loaded yet.
-                            if (replacementTexture == nullptr) {
-                                std::filesystem::path filePath = textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath);
-
-                                // Queue the texture for being loaded from a texture cache streaming thread.
-                                if ((databaseTexture.load == ReplacementLoad::Stream) || (databaseTexture.load == ReplacementLoad::Async)) {
-                                    // Push the file if it hasn't been uploaded to the queue yet.
-                                    if (streamDescQueueSet.find(relativePath) == streamDescQueueSet.end()) {
-                                        streamDescQueueMutex.lock();
-                                        streamDescQueue.push(StreamDescription(filePath, relativePath));
-                                        streamDescQueueMutex.unlock();
-                                        streamDescQueueSet.insert(relativePath);
-                                        streamDescQueueChanged.notify_all();
-                                    }
-
-                                    // Store the hash to check for the replacement when the texture is done streaming.
-                                    streamPendingReplacementChecks.emplace(relativePath, replacementCheck);
-
-                                    // Use the low mip cache texture if it exists.
-                                    replacementTexture = lowMipCacheTexture;
-                                }
-                                // Load the texture directly on this thread.
-                                else if (TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
-                                    replacementUploadResources.emplace_back();
-                                    replacementTexture = TextureCache::loadTextureFromBytes(threadWorker, replacementBytes, replacementUploadResources.back(), nullptr, nullptr);
-                                    textureMap.replacementMap.addLoadedTexture(replacementTexture, relativePath);
-                                }
-                            }
-
-                            if (replacementTexture != nullptr) {
-                                bool lowPriorityReplacement = (replacementTexture == lowMipCacheTexture);
-                                texturesReplaced.emplace_back(HashTexturePair{ replacementCheck.textureHash, replacementTexture, lowPriorityReplacement });
-                            }
-                        }
+                        // Add this hash so it's checked for a replacement.
+                        replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, databaseHash });
                     }
                 }
 
+                texturesReplaced.clear();
+
+                for (const ReplacementCheck &replacementCheck : replacementQueueCopy) {
+                    std::string relativePath;
+                    uint32_t databaseIndex = 0;
+                    if (textureMap.replacementMap.getInformationFromHash(replacementCheck.databaseHash, relativePath, databaseIndex)) {
+                        const ReplacementTexture &databaseTexture = textureMap.replacementMap.db.textures[databaseIndex];
+                        Texture *replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
+                        Texture *lowMipCacheTexture = nullptr;
+
+                        // Look for the low mip cache version if it exists if we can't use the real replacement yet.
+                        if ((replacementTexture == nullptr) && (databaseTexture.load == ReplacementLoad::Stream)) {
+                            auto lowMipCacheIt = textureMap.replacementMap.lowMipCacheTextures.find(relativePath);
+                            if (lowMipCacheIt != textureMap.replacementMap.lowMipCacheTextures.end()) {
+                                lowMipCacheTexture = lowMipCacheIt->second.texture;
+
+                                // Transition the texture from the low mip cache if it hasn't been transitioned to shader read yet.
+                                if (!lowMipCacheIt->second.transitioned) {
+                                    afterDecodeBarriers.emplace_back(lowMipCacheTexture->texture.get(), RenderTextureLayout::SHADER_READ);
+                                    lowMipCacheIt->second.transitioned = true;
+                                }
+                            }
+                        }
+
+                        // Replacement texture hasn't been loaded yet.
+                        if (replacementTexture == nullptr) {
+                            std::filesystem::path filePath = textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath);
+
+                            // Queue the texture for being loaded from a texture cache streaming thread.
+                            if ((databaseTexture.load == ReplacementLoad::Stream) || (databaseTexture.load == ReplacementLoad::Async)) {
+                                // Push the file if it hasn't been uploaded to the queue yet.
+                                if (streamDescQueueSet.find(relativePath) == streamDescQueueSet.end()) {
+                                    streamDescQueueMutex.lock();
+                                    streamDescQueue.push(StreamDescription(filePath, relativePath));
+                                    streamDescQueueMutex.unlock();
+                                    streamDescQueueSet.insert(relativePath);
+                                    streamDescQueueChanged.notify_all();
+                                }
+
+                                // Store the hash to check for the replacement when the texture is done streaming.
+                                streamPendingReplacementChecks.emplace(relativePath, replacementCheck);
+                                    
+                                // Use the low mip cache texture if it exists.
+                                replacementTexture = lowMipCacheTexture;
+                            }
+                            // Load the texture directly on this thread.
+                            else if (TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
+                                replacementUploadResources.emplace_back();
+                                replacementTexture = TextureCache::loadTextureFromBytes(copyWorker->device, copyWorker->commandList.get(), replacementBytes, replacementUploadResources.back());
+                                textureMap.replacementMap.addLoadedTexture(replacementTexture, relativePath);
+                                afterDecodeBarriers.emplace_back(replacementTexture->texture.get(), RenderTextureLayout::SHADER_READ);
+                            }
+                        }
+
+                        if (replacementTexture != nullptr) {
+                            bool lowPriorityReplacement = (replacementTexture == lowMipCacheTexture);
+                            texturesReplaced.emplace_back(HashTexturePair{ replacementCheck.textureHash, replacementTexture, lowPriorityReplacement });
+                        }
+                    }
+                }
+                
+                // Execute the copy worker and signal a semaphore so it synchronizes with the direct worker afterwards.
+                const RenderCommandList *copyCommandList = copyWorker->commandList.get();
+                RenderCommandSemaphore *syncSemaphore = copyToDirectSemaphore.get();
+                copyWorker->commandList->end();
+                copyWorker->commandQueue->executeCommandLists(&copyCommandList, 1, nullptr, 0, &syncSemaphore, 1);
+                
+                // Decode all textures using the direct worker and transition all textures to their final layouts.
+                directWorker->commandList->begin();
+                directWorker->commandList->barriers(RenderBarrierStage::GRAPHICS_AND_COMPUTE, beforeDecodeBarriers);
+
+                const ShaderRecord &textureDecode = shaderLibrary->textureDecode;
+                bool pipelineSet = false;
+                for (size_t i = 0; i < queueSize; i++) {
+                    const TextureUpload &upload = queueCopy[i];
+                    if (upload.decodeTMEM) {
+                        if (!pipelineSet) {
+                            directWorker->commandList->setPipeline(textureDecode.pipeline.get());
+                            directWorker->commandList->setComputePipelineLayout(textureDecode.pipelineLayout.get());
+                        }
+
+                        interop::TextureDecodeCB decodeCB;
+                        decodeCB.Resolution.x = upload.width;
+                        decodeCB.Resolution.y = upload.height;
+                        decodeCB.fmt = upload.loadTile.fmt;
+                        decodeCB.siz = upload.loadTile.siz;
+                        decodeCB.address = interop::uint(upload.loadTile.tmem) << 3;
+                        decodeCB.stride = interop::uint(upload.loadTile.line) << 3;
+                        decodeCB.tlut = upload.tlut;
+                        decodeCB.palette = upload.loadTile.palette;
+
+                        // Dispatch compute shader for decoding texture.
+                        const uint32_t ThreadGroupSize = 8;
+                        const uint32_t dispatchX = (decodeCB.Resolution.x + ThreadGroupSize - 1) / ThreadGroupSize;
+                        const uint32_t dispatchY = (decodeCB.Resolution.y + ThreadGroupSize - 1) / ThreadGroupSize;
+                        directWorker->commandList->setComputePushConstants(0, &decodeCB);
+                        directWorker->commandList->setComputeDescriptorSet(descriptorSets[i]->get(), 0);
+                        directWorker->commandList->dispatch(dispatchX, dispatchY, 1);
+
+                        afterDecodeBarriers.emplace_back(RenderTextureBarrier(texturesUploaded[i].texture->texture.get(), RenderTextureLayout::SHADER_READ));
+                    }
+                }
+
+                if (!afterDecodeBarriers.empty()) {
+                    directWorker->commandList->barriers(RenderBarrierStage::GRAPHICS_AND_COMPUTE, afterDecodeBarriers);
+                }
+
+                // Execute the direct worker but make it wait for the copy worker to finish first.
+                const RenderCommandList *directCommandList = directWorker->commandList.get();
+                directWorker->commandList->end();
+                directWorker->commandQueue->executeCommandLists(&directCommandList, 1, &syncSemaphore, 1, nullptr, 0, directWorker->commandFence.get());
+                directWorker->wait();
+
+                // Delete all the resources used during the upload of replacements.
                 replacementUploadResources.clear();
 
                 // Add all the textures to the map once they're ready.
@@ -1073,7 +1099,7 @@ namespace RT64 {
                     for (const HashTexturePair &pair : texturesUploaded) {
                         textureMap.add(pair.hash, pair.texture->creationFrame, pair.texture);
                     }
-                    
+
                     for (const HashTexturePair &pair : texturesReplaced) {
                         textureMap.replace(pair.hash, pair.texture, pair.lowPriorityReplacement);
                     }
@@ -1134,7 +1160,7 @@ namespace RT64 {
         return useTexture(hash, submissionFrame, textureIndex, textureScale, textureReplaced, hasMipmaps);
     }
     
-    bool TextureCache::addReplacement(RenderWorker *directWorker, uint64_t hash, const std::string &relativePath) {
+    bool TextureCache::addReplacement(uint64_t hash, const std::string &relativePath) {
         // TODO: The case where a replacement is reloaded needs to be handled correctly. Multiple hashes can point to the same path. All hashes pointing to that path must be reloaded correctly.
 
         std::unique_lock lock(textureMapMutex);
@@ -1147,8 +1173,14 @@ namespace RT64 {
         std::unique_ptr<RenderBuffer> dstUploadBuffer;
         Texture *newTexture = nullptr;
         {
-            RenderWorkerExecution execution(directWorker);
-            newTexture = TextureCache::loadTextureFromBytes(directWorker, replacementBytes, dstUploadBuffer);
+            loaderCommandList->begin();
+            newTexture = TextureCache::loadTextureFromBytes(copyWorker->device, loaderCommandList.get(), replacementBytes, dstUploadBuffer);
+            loaderCommandList->end();
+
+            if (newTexture != nullptr) {
+                copyWorker->commandQueue->executeCommandLists(loaderCommandList.get(), loaderCommandFence.get());
+                copyWorker->commandQueue->waitForCommandFence(loaderCommandFence.get());
+            }
         }
 
         // Queue the texture as if it was the result from a streaming thread.
@@ -1176,7 +1208,7 @@ namespace RT64 {
         return true;
     }
     
-    bool TextureCache::loadReplacementDirectory(RenderWorker *directWorker, const std::filesystem::path &directoryPath) {
+    bool TextureCache::loadReplacementDirectory(const std::filesystem::path &directoryPath) {
         // Wait for the streaming threads to be finished.
         waitForAllStreamThreads();
 
@@ -1217,10 +1249,18 @@ namespace RT64 {
         std::vector<uint8_t> mipCacheBytes;
         if (loadBytesFromPath(directoryPath / ReplacementLowMipCacheFilename, mipCacheBytes)) {
             std::unique_ptr<RenderBuffer> uploadBuffer;
-            if (!setLowMipCache(textureMap.replacementMap.lowMipCacheTextures, directWorker, mipCacheBytes.data(), mipCacheBytes.size(), uploadBuffer)) {
+            loaderCommandList->begin();
+            bool cacheLoaded = setLowMipCache(copyWorker->device, loaderCommandList.get(), mipCacheBytes.data(), mipCacheBytes.size(), uploadBuffer, textureMap.replacementMap.lowMipCacheTextures);
+            loaderCommandList->end();
+
+            if (cacheLoaded) {
+                copyWorker->commandQueue->executeCommandLists(loaderCommandList.get(), loaderCommandFence.get());
+                copyWorker->commandQueue->waitForCommandFence(loaderCommandFence.get());
+            }
+            else {
                 // Delete the textures that were loaded into the low mip cache.
                 for (auto it : textureMap.replacementMap.lowMipCacheTextures) {
-                    delete it.second;
+                    delete it.second.texture;
                 }
 
                 textureMap.replacementMap.lowMipCacheTextures.clear();

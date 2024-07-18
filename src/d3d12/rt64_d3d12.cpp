@@ -1978,6 +1978,26 @@ namespace RT64 {
         }
     }
 
+    // D3D12CommandSemaphore
+
+    D3D12CommandSemaphore::D3D12CommandSemaphore(D3D12Device *device) {
+        assert(device != nullptr);
+
+        this->device = device;
+
+        HRESULT res = device->d3d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d));
+        if (FAILED(res)) {
+            fprintf(stderr, "CreateFence failed with error code 0x%X.\n", res);
+            return;
+        }
+    }
+
+    D3D12CommandSemaphore::~D3D12CommandSemaphore() {
+        if (d3d != nullptr) {
+            d3d->Release();
+        }
+    }
+
     // D3D12CommandQueue
 
     D3D12CommandQueue::D3D12CommandQueue(D3D12Device *device, RenderCommandListType type) {
@@ -2023,7 +2043,12 @@ namespace RT64 {
         return std::make_unique<D3D12SwapChain>(this, renderWindow, bufferCount, format);
     }
 
-    void D3D12CommandQueue::executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandFence *signalFence) {
+    void D3D12CommandQueue::executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount, RenderCommandSemaphore **signalSemaphores, uint32_t signalSemaphoreCount, RenderCommandFence *signalFence) {
+        for (uint32_t i = 0; i < waitSemaphoreCount; i++) {
+            D3D12CommandSemaphore *interfaceSemaphore = static_cast<D3D12CommandSemaphore *>(waitSemaphores[i]);
+            d3d->Wait(interfaceSemaphore->d3d, interfaceSemaphore->semaphoreValue);
+        }
+
         thread_local std::vector<ID3D12CommandList *> executionVector;
         executionVector.clear();
         for (uint32_t i = 0; i < commandListCount; i++) {
@@ -2033,6 +2058,12 @@ namespace RT64 {
 
         if (!executionVector.empty()) {
             d3d->ExecuteCommandLists(UINT(executionVector.size()), executionVector.data());
+        }
+
+        for (uint32_t i = 0; i < signalSemaphoreCount; i++) {
+            D3D12CommandSemaphore *interfaceSemaphore = static_cast<D3D12CommandSemaphore *>(signalSemaphores[i]);
+            interfaceSemaphore->semaphoreValue++;
+            d3d->Signal(interfaceSemaphore->d3d, interfaceSemaphore->semaphoreValue);
         }
         
         if (signalFence != nullptr) {
@@ -2130,6 +2161,10 @@ namespace RT64 {
 
     std::unique_ptr<RenderBufferFormattedView> D3D12Buffer::createBufferFormattedView(RenderFormat format) {
         return std::make_unique<D3D12BufferFormattedView>(this, format);
+    }
+
+    void D3D12Buffer::setName(const std::string &name) {
+        setObjectName(d3d, name);
     }
 
     // D3D12BufferFormattedView
@@ -3177,6 +3212,10 @@ namespace RT64 {
 
     std::unique_ptr<RenderCommandFence> D3D12Device::createCommandFence() {
         return std::make_unique<D3D12CommandFence>(this);
+    }
+
+    std::unique_ptr<RenderCommandSemaphore> D3D12Device::createCommandSemaphore() {
+        return std::make_unique<D3D12CommandSemaphore>(this);
     }
 
     std::unique_ptr<RenderFramebuffer> D3D12Device::createFramebuffer(const RenderFramebufferDesc &desc) {
