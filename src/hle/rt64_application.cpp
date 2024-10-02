@@ -84,10 +84,10 @@ namespace RT64 {
 
     Application::SetupResult Application::setup(uint32_t threadId) {
 #   ifdef _WIN64
-        if (!DynamicLibraries::load()) {
-            fprintf(stderr, "Failed to load dynamic libraries. Make sure the dependencies are next to the Plugin's DLL.\n");
-            return SetupResult::Success;
-        }
+    //  if (!DynamicLibraries::load()) {
+    //      fprintf(stderr, "Failed to load dynamic libraries. Make sure the dependencies are next to the Plugin's DLL.\n");
+    //      return SetupResult::Success;
+    //  }
 #   endif
 
         // Attempt to load the configuration. If it couldn't be loaded, save a new file instead.
