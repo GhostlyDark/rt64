@@ -301,7 +301,7 @@ set (SOURCES
     "${PROJECT_SOURCE_DIR}/src/api/rt64_api_plugin.cpp"
 
     "${PROJECT_SOURCE_DIR}/src/common/rt64_common.cpp"
-    "${PROJECT_SOURCE_DIR}/src/common/rt64_dynamic_libraries.cpp"
+#   "${PROJECT_SOURCE_DIR}/src/common/rt64_dynamic_libraries.cpp"
     "${PROJECT_SOURCE_DIR}/src/common/rt64_elapsed_timer.cpp"
     "${PROJECT_SOURCE_DIR}/src/common/rt64_emulator_configuration.cpp"
     "${PROJECT_SOURCE_DIR}/src/common/rt64_enhancement_configuration.cpp"
