@@ -44,6 +44,10 @@ DLLEXPORT void CALL GetDllInfo(pj64::PLUGIN_INFO *PluginInfo) {
     PluginInfo->Version = 0x103;
     PluginInfo->Type = pj64::PLUGIN_TYPE_VIDEO;
     strncpy(PluginInfo->Name, PLUGIN_NAME, sizeof(PluginInfo->Name));
+
+    /* Setting supported memory options required by PJ64 versions prior to 4.0-5830 (3576bb2) */
+    PluginInfo->Reserved1 = false; // Normal Memory;
+    PluginInfo->Reserved2 = true;  // MemoryBswaped;
 }
 #endif
 
