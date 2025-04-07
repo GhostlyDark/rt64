@@ -6,7 +6,7 @@
 
 namespace RT64 {
     struct TMEMHasher {
-        static const uint32_t CurrentHashVersion = 4;
+        static const uint32_t CurrentHashVersion = 3;
 
         static bool needsToHashRowsIndividually(const LoadTile &loadTile, uint32_t width) {
             // When using 32-bit formats, TMEM contents are split in half in the lower and upper half, so the size per row is effectively
@@ -37,36 +37,14 @@ namespace RT64 {
             const uint32_t drawBytesTotal = (loadTile.line << 3) * (height - 1) + drawBytesPerRow;
             const uint32_t tmemMask = halfTMEM ? TMEMMask16 : TMEMMask8;
             const uint32_t tmemAddress = (loadTile.tmem << 3) & tmemMask;
-            auto hashTMEM = [&](uint32_t tmemBaseAddress, uint32_t tmemOrAddress, uint32_t byteCount, bool oddRow) {
-                assert((tmemBaseAddress < tmemSize) && "Base address must be masked within the bounds of the TMEM size.");
-
+            auto hashTMEM = [&](uint32_t tmemBaseAddress, uint32_t tmemOrAddress, uint32_t byteCount) {
                 // Too many bytes to hash in a single step. Wrap around TMEM and hash the rest.
                 if ((tmemBaseAddress + byteCount) > tmemSize) {
-                    const uint32_t firstBytes = (tmemSize - tmemBaseAddress);
+                    const uint32_t firstBytes = std::min(byteCount, std::max(tmemSize - tmemBaseAddress, 0U));
                     XXH3_64bits_update(&xxh3, &TMEM[tmemBaseAddress | tmemOrAddress], firstBytes);
-
-                    // Start hashing from the start of TMEM.
-                    byteCount = std::min(byteCount - firstBytes, tmemBaseAddress);
-                    tmemBaseAddress = 0;
+                    XXH3_64bits_update(&xxh3, &TMEM[tmemOrAddress], std::min(byteCount - firstBytes, tmemBaseAddress));
                 }
-
-                // Version 4 fixes an error where odd row word swapping was not considered when hashing rows individually.
-                if (oddRow && (version >= 4)) {
-                    uint32_t wordCount = byteCount / 8;
-                    if (wordCount > 0) {
-                        XXH3_64bits_update(&xxh3, &TMEM[tmemBaseAddress | tmemOrAddress], wordCount * 8);
-                        tmemBaseAddress += wordCount * 8;
-                        byteCount -= wordCount * 8;
-                    }
-                    
-                    if (byteCount > 4) {
-                        XXH3_64bits_update(&xxh3, &TMEM[tmemBaseAddress | tmemOrAddress], byteCount - 4);
-                        XXH3_64bits_update(&xxh3, &TMEM[(tmemBaseAddress + 4) | tmemOrAddress], 4);
-                    }
-                    else if (byteCount > 0) {
-                        XXH3_64bits_update(&xxh3, &TMEM[(tmemBaseAddress + 4) | tmemOrAddress], byteCount);
-                    }
-                }
+                // Hash as normal.
                 else {
                     XXH3_64bits_update(&xxh3, &TMEM[tmemBaseAddress | tmemOrAddress], byteCount);
                 }
@@ -76,20 +54,20 @@ namespace RT64 {
             if ((version >= 2) && TMEMHasher::needsToHashRowsIndividually(loadTile, width)) {
                 uint32_t tmemBytesPerRow = loadTile.line << 3;
                 for (uint32_t i = 0; i < height; i++) {
-                    hashTMEM((tmemAddress + i * tmemBytesPerRow) & tmemMask, 0x0, drawBytesPerRow, i & 1);
+                    hashTMEM((tmemAddress + i * tmemBytesPerRow) & tmemMask, 0x0, drawBytesPerRow);
                 }
 
                 if (RGBA32) {
                     for (uint32_t i = 0; i < height; i++) {
-                        hashTMEM((tmemAddress + i * tmemBytesPerRow) & tmemMask, tmemSize, drawBytesPerRow, i & 1);
+                        hashTMEM((tmemAddress + i * tmemBytesPerRow) & tmemMask, tmemSize, drawBytesPerRow);
                     }
                 }
             }
             else {
-                hashTMEM(tmemAddress, 0x0, drawBytesTotal, false);
+                hashTMEM(tmemAddress, 0x0, drawBytesTotal);
 
                 if (RGBA32) {
-                    hashTMEM(tmemAddress, tmemSize, drawBytesTotal, false);
+                    hashTMEM(tmemAddress, tmemSize, drawBytesTotal);
                 }
             }
 
