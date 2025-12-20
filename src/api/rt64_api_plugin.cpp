@@ -99,7 +99,7 @@ DLLEXPORT int CALL InitiateGFX(PluginGraphicsInfo graphicsInfo) {
 #ifdef _WIN32
     case RT64::APIType::Project64:
         RT64::InitiateGFXCore<Project64GraphicsInfo>(appCore, graphicsInfo.project64);
-        appCore.window = RT64::RenderWindow(graphicsInfo.project64.hWnd);
+        appCore.window = plume::RenderWindow(graphicsInfo.project64.hWnd);
         threadId = GetCurrentThreadId();
         break;
 #endif
