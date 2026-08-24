@@ -13,7 +13,6 @@
 #include "render/rt64_projection_processor.h"
 #include "render/rt64_raster_shader_cache.h"
 #include "render/rt64_tile_processor.h"
-#include "render/rt64_look_at_processor.h"
 #include "render/rt64_transform_processor.h"
 
 #include "rt64_shared_queue_resources.h"
@@ -56,6 +55,7 @@ namespace RT64 {
             float aspectRatioScale = 1.0f;
             float extAspectPercentage = 1.0f;
             uint32_t targetRate = 0;
+            bool fixRectLR = false;
             bool postBlendNoise = false;
             bool postBlendNoiseNegative = false;
         };
@@ -85,7 +85,6 @@ namespace RT64 {
         std::unique_ptr<FramebufferRenderer> framebufferRenderer;
         std::unique_ptr<RenderFramebufferManager> renderFramebufferManager;
         TileProcessor tileProcessor;
-        LookAtProcessor lookAtProcessor;
         TransformProcessor transformProcessor;
         ProjectionProcessor projectionProcessor;
         std::unique_ptr<RSPProcessor> rspProcessor;
@@ -111,12 +110,12 @@ namespace RT64 {
         void waitForWorkloadId(uint64_t waitId);
         void setup(const External &ext);
         void updateMultisampling();
-        void threadConfigurationUpdate(hlslpp::uint2 viFbSize, WorkloadConfiguration &workloadConfig);
+        void threadConfigurationUpdate(WorkloadConfiguration &workloadConfig);
         void threadConfigurationValidate();
         void threadRenderFrame(GameFrame &curFrame, const GameFrame &prevFrame, const WorkloadConfiguration &workloadConfig,
             const DebuggerRenderer &debuggerRenderer, const DebuggerCamera &debuggerCamera, float curFrameWeight, float prevFrameWeight,
             float deltaTimeMs, RenderTargetKey overrideTargetKey, int32_t overrideTargetFbPairIndex, RenderTarget *overrideTarget,
-            uint32_t overrideTargetModifier, bool uploadVelocity, bool uploadExtras, bool interpolateTiles, bool interpolateLookAts);
+            uint32_t overrideTargetModifier, bool uploadVelocity, bool uploadExtras, bool interpolateTiles);
 
         void threadAdvanceBarrier();
         void threadAdvanceWorkloadId(uint64_t newWorkloadId);
