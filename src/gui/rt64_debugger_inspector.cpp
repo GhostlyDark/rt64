@@ -8,10 +8,12 @@
 #include <cinttypes>
 
 #include "imgui/imgui.h"
+#include "stb/stb_image_write.h"
 #include "xxHash/xxh3.h"
 
 #include "common/rt64_common.h"
 #include "common/rt64_math.h"
+#include "common/rt64_tmem_decoder.h"
 #include "common/rt64_tmem_hasher.h"
 #include "hle/rt64_color_converter.h"
 #include "hle/rt64_vi.h"
@@ -41,6 +43,10 @@ namespace RT64 {
         }
 
         return lhs.drawCallIndex < rhs.drawCallIndex;
+    }
+
+    static void stbi_write_func_ofstream(void *context, void *data, int size) {
+        ((std::ofstream *)(context))->write((const char *)(data), size);
     }
 
     DebuggerInspector::DebuggerInspector() {
@@ -1231,6 +1237,25 @@ namespace RT64 {
 
                                         uint32_t textureIndex = 0;
                                         const Texture *texture = nullptr;
+
+                                        if (ImGui::Button("Dump PNG")) {
+                                            textureCache.useTexture(callTile.tmemHashOrID, workload.submissionFrame, textureIndex);
+                                            texture = textureCache.getTexture(textureIndex);
+                                            if (texture != nullptr) {
+                                                std::filesystem::path pngFilename = FileDialog::getSaveFilename({ FileFilter("PNG Files", "png") });
+                                                if (!pngFilename.empty()) {
+                                                    std::ofstream o(pngFilename, std::ios_base::out | std::ios_base::binary);
+                                                    if (o.is_open()) {
+                                                        std::vector<uint32_t> rgbaPixels;
+                                                        TMEMDecoder::decodeToRGBA32(texture->bytesTMEM.data(), texture->loadTile, texture->width, texture->height, texture->tlut, rgbaPixels);
+                                                        stbi_write_png_to_func(&stbi_write_func_ofstream, &o, texture->width, texture->height, 4, rgbaPixels.data(), texture->width * sizeof(uint32_t));
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        ImGui::SameLine();
+
                                         if (ImGui::Button("Dump TMEM")) {
                                             textureCache.useTexture(callTile.tmemHashOrID, workload.submissionFrame, textureIndex);
                                             texture = textureCache.getTexture(textureIndex);
@@ -1243,6 +1268,10 @@ namespace RT64 {
                                                     }
                                                 }
                                             }
+                                        }
+
+                                        if (callTile.rawTMEM) {
+                                            ImGui::Text("Tile parameters are misconfigured. A replacement texture can't be dumped accurately to PNG.");
                                         }
 
                                         ImGui::Unindent();
